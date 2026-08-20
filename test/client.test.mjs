@@ -1,0 +1,314 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+
+/** Load the two plain client sources exactly as the build script inlines them. */
+function loadClient() {
+  const core = readFileSync(path.join(root, 'src', 'client-core.js'), 'utf8')
+  const app = readFileSync(path.join(root, 'src', 'client-app.js'), 'utf8')
+  // eslint-disable-next-line no-new-func
+  const factory = new Function(`${core}\n${app}\n;return { Core: FileAttachCore, build: buildFileAttachPlugin }`)
+  return factory()
+}
+
+const { Core, build } = loadClient()
+
+// ── pure core ───────────────────────────────────────────────────────────────
+
+test('Core.classifyFile mirrors the built-in image MIME set', () => {
+  assert.equal(Core.classifyFile('image/png'), 'image')
+  assert.equal(Core.classifyFile('image/gif'), 'image')
+  assert.equal(Core.classifyFile('application/pdf'), 'file')
+  assert.equal(Core.classifyFile(''), 'file')
+})
+
+test('Core.humanSize formats compactly', () => {
+  assert.equal(Core.humanSize(0), '0 B')
+  assert.equal(Core.humanSize(1024), '1.0 KB')
+  assert.equal(Core.humanSize(50 * 1024 * 1024), '50.0 MB')
+})
+
+test('Core.modelForm: extract fence, no python hints, no vault path', () => {
+  const rich = Core.modelForm({
+    id: 'ab12cd34',
+    name: 'book.pdf',
+    size: 2048,
+    extract: { kind: 'pdf', text: 'Chapter 1', truncated: false, notes: [] },
+  })
+  assert.match(rich, /book\.pdf/)
+  assert.match(rich, /id=ab12cd34/)
+  assert.match(rich, /Chapter 1/)
+  assert.doesNotMatch(rich, /pypdf|read with the read tool|attachments\/|file-attach/)
+  const plain = Core.modelForm({ id: 'x', name: 'app.py', size: 10 })
+  assert.match(plain, /app\.py/)
+  assert.doesNotMatch(plain, /attachments\//)
+  const degraded = Core.modelForm({ id: 'ab12cd34' })
+  assert.match(degraded, /id=ab12cd34/)
+  assert.match(degraded, /attach_\*/)
+  assert.doesNotMatch(degraded, /attachments\//)
+})
+
+test('Core.endOfDraftSpan appends at the draft end with the CAS revision', () => {
+  assert.deepEqual(Core.endOfDraftSpan('hello', 7), { start: 5, end: 5, draftRev: 7 })
+  assert.deepEqual(Core.endOfDraftSpan('', 0), { start: 0, end: 0, draftRev: 0 })
+})
+
+test('Core.parseAttachLine only matches a leading /attach token', () => {
+  assert.equal(Core.parseAttachLine('/attach ab12cd34'), 'ab12cd34')
+  assert.equal(Core.parseAttachLine('x /attach ab12cd34'), null)
+})
+
+test('Core.chunkPlan splits byte ranges', () => {
+  assert.equal(Core.chunkPlan(0, 10).length, 0)
+  assert.deepEqual(Core.chunkPlan(2500, 1000), [
+    { start: 0, end: 1000 },
+    { start: 1000, end: 2000 },
+    { start: 2000, end: 2500 },
+  ])
+})
+
+// ── plugin behavior with stubbed ctx and browser ────────────────────────────
+
+/** Minimal browser/document/fetch stand-ins for apply(). */
+function stubBrowser() {
+  const listeners = new Map()
+  const state = {
+    prevented: false,
+    stopped: false,
+    dragends: 0,
+    fetches: [],
+    prompts: [],
+    bailCalls: [],
+    notifies: [],
+    sources: [],
+    slots: [],
+  }
+  const Event = class Event {
+    constructor(type) { this.type = type }
+  }
+  globalThis.Event = Event
+  globalThis.window = {
+    dispatchEvent: () => { state.dragends += 1 },
+  }
+  globalThis.document = {
+    addEventListener: (type, fn) => { listeners.set(type, fn) },
+    removeEventListener: () => {},
+    createElement: () => {
+      const el = { click: () => {}, remove: () => {} }
+      el.setAttribute = () => {}
+      return el
+    },
+  }
+  globalThis.fetch = async (url, options = {}) => {
+    state.fetches.push({ url, options })
+    if (String(url).includes('/config')) {
+      return { ok: true, json: async () => ({ maxFileBytes: 12345, maxFilesPerMessage: 3, vaultDir: 'file-attach' }) }
+    }
+    if (String(url).includes('/extract')) {
+      return { ok: true, json: async () => ({ kind: 'text', text: 'reloaded-extract', truncated: false, notes: [] }) }
+    }
+    // Echo the requested file name back so each upload resolves its own meta.
+    const encoded = (options.headers && options.headers['x-file-name']) || encodeURIComponent('a.pdf')
+    const name = decodeURIComponent(encoded)
+    const meta = {
+      id: 'ab12cd34',
+      name,
+      size: 5,
+      extract: { kind: 'text', text: 'extracted:' + name, truncated: false, notes: [] },
+    }
+    return { ok: true, json: async () => meta }
+  }
+  return { listeners, state }
+}
+
+/** A stub ctx shaped like the client services the plugin declares. */
+function stubCtx(browser) {
+  const actx = {
+    bail(self, name, payload) {
+      browser.state.bailCalls.push({ name, payload })
+      return true
+    },
+  }
+  const input = {
+    state: { getSnapshot: () => ({ draft: 'hello', draftRev: 3, phase: 'plain' }) },
+    notify(level, text) { browser.state.notifies.push({ level, text }) },
+  }
+  const session = {
+    prompt: async (content, mode) => {
+      browser.state.prompts.push({ content, mode })
+      return { ok: true }
+    },
+  }
+  const ctx = {
+    locale: {
+      register: () => () => {},
+      bind: () => (key, params) => key + (params === undefined ? '' : `:${JSON.stringify(params)}`),
+    },
+    sessions: {
+      list: { getSnapshot: () => ({ current: 's1' }) },
+      scope: (id) => (id === 's1' ? actx : undefined),
+      sessionOf: () => session,
+    },
+    conversation: { input: { for: () => input } },
+    inputTriggers: { registerSource: (source) => { browser.state.sources.push(source); return () => {} } },
+    slots: {
+      inject: (name, callback) => {
+        browser.state.slots.push({ name, options: null, component: null })
+        return callback()
+      },
+      register: (options, component) => {
+        const last = browser.state.slots[browser.state.slots.length - 1]
+        last.options = options
+        last.component = component
+        return () => {}
+      },
+    },
+    effect: (callback) => {
+      const disposer = callback()
+      return typeof disposer === 'function' ? disposer : () => {}
+    },
+  }
+  return { ctx, actx, input }
+}
+
+function fileLike(name, type, size) {
+  return {
+    name,
+    type,
+    size,
+    slice: () => ({ arrayBuffer: async () => new ArrayBuffer(size) }),
+  }
+}
+
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+test('apply registers the attach source; codec serializes the rich model form', async () => {
+  const browser = stubBrowser()
+  const { ctx } = stubCtx(browser)
+  const plugin = build({ React: {}, Core })
+  assert.equal(plugin.name, 'file-attach')
+  assert.deepEqual(plugin.inject, ['slots', 'locale', 'inputTriggers', 'sessions', 'conversation'])
+  plugin.apply(ctx)
+
+  const source = browser.state.sources[0]
+  assert.equal(source.trigger, '/')
+  assert.equal(source.name, 'attach')
+  assert.equal(typeof source.codec, 'object')
+
+  // Drive a drop: upload is stubbed to resolve a file meta, then a chip is
+  // inserted through the scoped input event.
+  browser.listeners.get('drop')({
+    dataTransfer: { types: ['Files'], files: [fileLike('a.pdf', 'application/pdf', 5)] },
+    preventDefault: () => { browser.state.prevented = true },
+    stopPropagation: () => { browser.state.stopped = true },
+  })
+  await tick()
+  await tick()
+
+  assert.equal(browser.state.prevented, true)
+  assert.equal(browser.state.stopped, true)
+  assert.equal(browser.state.dragends, 1, 'built-in overlay reset via synthetic dragend')
+  assert.equal(browser.state.bailCalls.length, 1)
+  const insert = browser.state.bailCalls[0]
+  assert.equal(insert.name, 'slash/input-insert-reference')
+  assert.equal(insert.payload.reference.source, 'attach')
+  assert.equal(insert.payload.reference.ref, 'ab12cd34')
+  assert.equal(insert.payload.reference.label, 'a.pdf')
+  assert.deepEqual(insert.payload.span, { start: 5, end: 5, draftRev: 3 })
+
+  const form = await source.codec.serialize('ab12cd34')
+  assert.match(form, /a\.pdf/)
+  assert.match(form, /extracted:a\.pdf/)
+  assert.doesNotMatch(form, /pypdf|attachments\/|file-attach/)
+  assert.equal(browser.state.notifies.filter((n) => n.level === 'info').length, 0)
+})
+
+test('registers the attach strip into conversation.input.dock', () => {
+  const browser = stubBrowser()
+  const { ctx } = stubCtx(browser)
+  build({ React: {}, Core }).apply(ctx)
+  assert.equal(browser.state.slots.length, 1)
+  const slot = browser.state.slots[0]
+  assert.equal(slot.name, 'conversation.input.dock')
+  assert.equal(slot.options.name, 'conversation.input.dock')
+  assert.equal(slot.options.id, 'file-attach')
+  assert.equal(typeof slot.component, 'function')
+})
+
+test('image-only drops are claimed by this plugin', async () => {
+  const browser = stubBrowser()
+  const { ctx } = stubCtx(browser)
+  build({ React: {}, Core }).apply(ctx)
+  browser.listeners.get('drop')({
+    dataTransfer: { types: ['Files'], files: [fileLike('photo.png', 'image/png', 5)] },
+    preventDefault: () => { browser.state.prevented = true },
+    stopPropagation: () => { browser.state.stopped = true },
+  })
+  await tick()
+  await tick()
+  assert.equal(browser.state.prevented, true)
+  assert.equal(browser.state.stopped, true)
+  assert.equal(browser.state.bailCalls.length, 1)
+  assert.equal(browser.state.bailCalls[0].payload.reference.label, 'photo.png')
+})
+
+test('mixed drops attach every file including images', async () => {
+  const browser = stubBrowser()
+  const { ctx } = stubCtx(browser)
+  build({ React: {}, Core }).apply(ctx)
+  browser.listeners.get('drop')({
+    dataTransfer: {
+      types: ['Files'],
+      files: [fileLike('photo.png', 'image/png', 5), fileLike('notes.pdf', 'application/pdf', 5)],
+    },
+    preventDefault: () => { browser.state.prevented = true },
+    stopPropagation: () => { browser.state.stopped = true },
+  })
+  await tick()
+  await tick()
+  await tick()
+  assert.equal(browser.state.bailCalls.length, 2)
+  const labels = browser.state.bailCalls.map((c) => c.payload.reference.label).sort()
+  assert.deepEqual(labels, ['notes.pdf', 'photo.png'])
+})
+
+test('matchEnter claims a plain /attach line and sends the model form as a message', async () => {
+  const browser = stubBrowser()
+  const { ctx } = stubCtx(browser)
+  const plugin = build({ React: {}, Core })
+  plugin.apply(ctx)
+  const source = browser.state.sources[0]
+
+  const outcome = await source.matchEnter({ sessionId: 's1' }, '/attach ab12cd34')
+  assert.ok(outcome !== undefined)
+  const claimResult = await outcome.claim.submit('ab12cd34')
+  assert.deepEqual(claimResult, { kind: 'success' })
+  assert.equal(browser.state.prompts.length, 1)
+  assert.equal(browser.state.prompts[0].mode, 'queue')
+  assert.match(browser.state.prompts[0].content[0].text, /id=ab12cd34/)
+  assert.doesNotMatch(browser.state.prompts[0].content[0].text, /attachments\//)
+
+  // Non-attach slash lines are not claimed.
+  assert.equal(await source.matchEnter({ sessionId: 's1' }, '/goal build it'), undefined)
+})
+
+test('oversized drops are rejected with a toast and no chip', async () => {
+  const browser = stubBrowser()
+  const { ctx } = stubCtx(browser)
+  build({ React: {}, Core }).apply(ctx)
+  await tick() // let the config fetch land (maxFileBytes 12345)
+  await tick()
+  const big = fileLike('big.pdf', 'application/pdf', 999999)
+  browser.listeners.get('drop')({
+    dataTransfer: { types: ['Files'], files: [big] },
+    preventDefault: () => { browser.state.prevented = true },
+    stopPropagation: () => { browser.state.stopped = true },
+  })
+  await tick()
+  assert.equal(browser.state.bailCalls.length, 0)
+  assert.ok(browser.state.notifies.some((n) => n.level === 'error' && /tooLarge/.test(n.text)))
+})

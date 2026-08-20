@@ -1,0 +1,21 @@
+# dsh-file-attach bundle layer: one row, both halves.
+#
+# - The HOST half (package main -> lib/index.js) registers the ingest HTTP
+#   routes on ctx.webServer and the attach_* tools on ctx.tools.
+# - The WEB CLIENT half is discovered by ctx.clientModules because this same
+#   package declares dsh.client and exports "./client" -> lib/client.js.
+#
+# Config keys (optional, all with defaults). See lib/index.js Config.
+- insert:
+    - id: file-attach
+      name: dsh-file-attach
+      config:
+        maxFileBytes: 52428800
+        maxFilesPerMessage: 20
+        maxConcurrentUploads: 20
+        vaultDir: file-attach
+        maxExtractChars: 80000
+        explainImages: true
+        ocrLanguages: eng+chi_sim
+        explainTimeoutMs: 30000
+        describeProvider: spawn
