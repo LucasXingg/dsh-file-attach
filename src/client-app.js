@@ -12,9 +12,10 @@
  *  2. Chunked binary upload to the host half (POST /api/dsh-file-attach/upload).
  *  3. On success, inserts a reference chip into the composer draft through the
  *     scoped `slash/input-insert-reference` event. The host extract is spliced
- *     into the model form at serialize time.
- *  4. A `conversation.input.dock` strip: upload progress + the session's
- *     attached files + an Add picker (no tool-row paperclip).
+ *     into the model form at serialize time. The conversation UI strips the
+ *     extract fence and shows only the `[attached file …]` header.
+ *  4. A `conversation.input.dock` strip aligned to the composer card width:
+ *     upload progress + the session's attached files + an Add picker.
  *  5. A `/attach` input-trigger source whose `matchEnter` recovers a plain-text
  *     `/attach <id>` line after a page reload.
  */
@@ -455,16 +456,18 @@ function buildFileAttachPlugin(env) {
       document.addEventListener('drop', onDropCapture, true)
 
       // ── dock: progress + file list (conversation.input.dock) ────────────
+      // The dock slot is a full-width row above the composer card. Opt into
+      // DSH's shared composer width axis so the file list matches the card.
+      var aligned = Core.composerAlignedBox()
       var dockStyle = {
-        root: {
+        root: Object.assign({
           display: 'flex',
           flexDirection: 'column',
           gap: '6px',
-          width: '100%',
           padding: '4px 0',
           color: 'var(--dsw-fg, inherit)',
           fontSize: '12px',
-        },
+        }, aligned),
         row: {
           display: 'flex',
           alignItems: 'center',
@@ -598,11 +601,45 @@ function buildFileAttachPlugin(env) {
         }, AttachDock)
       })
 
+      // ── hide extract fences in conversation UI (model form stays intact) ──
+      function hideExtractFromUi(target) {
+        Core.hideExtractInTree(target === undefined || target === null ? document.body : target)
+      }
+
+      var extractObserver = null
+      var extractPoll = null
+      if (typeof MutationObserver === 'function' && document.body !== undefined && document.body !== null) {
+        extractObserver = new MutationObserver(function (records) {
+          for (var r = 0; r < records.length; r += 1) {
+            var record = records[r]
+            if (record.type === 'characterData') {
+              hideExtractFromUi(record.target)
+              continue
+            }
+            var added = record.addedNodes
+            if (added === undefined || added === null) continue
+            for (var n = 0; n < added.length; n += 1) hideExtractFromUi(added[n])
+          }
+        })
+        extractObserver.observe(document.documentElement || document.body, {
+          childList: true,
+          subtree: true,
+          characterData: true,
+        })
+        hideExtractFromUi(document.body)
+        extractPoll = setInterval(function () { hideExtractFromUi(document.body) }, 1000)
+        if (typeof extractPoll === 'object' && extractPoll !== null && typeof extractPoll.unref === 'function') {
+          extractPoll.unref()
+        }
+      }
+
       // ── teardown ──────────────────────────────────────────────────────────
       ctx.effect(function () {
         return function () {
           document.removeEventListener('dragover', onDragOverCapture, true)
           document.removeEventListener('drop', onDropCapture, true)
+          if (extractObserver !== null) extractObserver.disconnect()
+          if (extractPoll !== null) clearInterval(extractPoll)
           for (var controller of activeUploads) controller.abort()
           activeUploads.clear()
           dockItems = []

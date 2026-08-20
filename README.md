@@ -75,7 +75,9 @@ The model form is spliced into the user message at send time:
 
 `id=` is the 12-character hex upload id. Pass that to `attach_*` tools
 (not the filename). A unique original filename is also accepted as `id`.
-Vault paths are never included in the prompt.
+Vault paths are never included in the prompt. The conversation transcript
+hides the `----- extracted content -----` fence and shows the header line
+only; copy/log still contain the model form.
 
 Notebook ingest keeps **the last two lines** of each cell's text output.
 Scanned PDFs with an empty text layer note that and point at
@@ -97,7 +99,12 @@ description.
   uploads, is extracted, and a chip appears in the draft.
 - A strip above the composer (`conversation.input.dock`) lists attached files
   and shows a determinate progress bar while a file is uploading or extracting.
-  An **Add** control on that strip opens the file picker.
+  The strip uses DSH's composer width axis (`--dsh-composer-card-max-width`)
+  so it lines up with the input card. An **Add** control on that strip opens
+  the file picker.
+- After send, the model still receives the extracted-content fence; the
+  conversation UI shows only the `[attached file …]` header (the extract body
+  is stripped before paint).
 - The `/` menu offers an "Attach files…" entry.
 - After a page reload, a persisted `/attach <id>` token is still understood;
   serialize fetches `GET /api/dsh-file-attach/extract` to recover the text.

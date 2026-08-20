@@ -42,6 +42,7 @@ test('Core.modelForm: extract fence, no python hints, no vault path', () => {
   assert.match(rich, /book\.pdf/)
   assert.match(rich, /id=ab12cd34/)
   assert.match(rich, /Chapter 1/)
+  assert.match(rich, /----- extracted content -----/)
   assert.doesNotMatch(rich, /pypdf|read with the read tool|attachments\/|file-attach/)
   const plain = Core.modelForm({ id: 'x', name: 'app.py', size: 10 })
   assert.match(plain, /app\.py/)
@@ -50,6 +51,52 @@ test('Core.modelForm: extract fence, no python hints, no vault path', () => {
   assert.match(degraded, /id=ab12cd34/)
   assert.match(degraded, /attach_\*/)
   assert.doesNotMatch(degraded, /attachments\//)
+})
+
+test('Core.displayForm omits the extract fence; stripExtractForDisplay hides it', () => {
+  const meta = {
+    id: 'ab12cd34',
+    name: 'book.pdf',
+    size: 2048,
+    extract: { kind: 'pdf', text: 'Chapter 1 secret', truncated: false, notes: [] },
+  }
+  const shown = Core.displayForm(meta)
+  assert.match(shown, /book\.pdf/)
+  assert.match(shown, /id=ab12cd34/)
+  assert.doesNotMatch(shown, /Chapter 1|extracted content/)
+  const model = Core.modelForm(meta)
+  const stripped = Core.stripExtractForDisplay('Please summarize\n' + model + '\nThanks')
+  assert.match(stripped, /Please summarize/)
+  assert.match(stripped, /\[attached file "book\.pdf"/)
+  assert.match(stripped, /Thanks/)
+  assert.doesNotMatch(stripped, /Chapter 1 secret|extracted content/)
+})
+
+test('Core.hideExtractInTree rewrites text nodes and skips the composer', () => {
+  const text = {
+    nodeType: 3,
+    nodeValue: '[attached file "a.pdf" id=x]\n----- extracted content -----\nSECRET\n----- end -----',
+    parentElement: { closest: () => null },
+  }
+  assert.equal(Core.hideExtractInTree(text), true)
+  assert.equal(text.nodeValue, '[attached file "a.pdf" id=x]')
+
+  const composerText = {
+    nodeType: 3,
+    nodeValue: '[attached file "a.pdf" id=x]\n----- extracted content -----\nSECRET\n----- end -----',
+    parentElement: { closest: (sel) => (String(sel).includes('data-composer-card') ? {} : null) },
+  }
+  assert.equal(Core.hideExtractInTree(composerText), false)
+  assert.match(composerText.nodeValue, /SECRET/)
+})
+
+test('Core.composerAlignedBox tracks the composer card max-width axis', () => {
+  const box = Core.composerAlignedBox()
+  assert.equal(box.width, '100%')
+  assert.equal(box.boxSizing, 'border-box')
+  assert.match(box.maxWidth, /--dsh-composer-card-max-width/)
+  assert.equal(box.marginLeft, 'auto')
+  assert.equal(box.marginRight, 'auto')
 })
 
 test('Core.endOfDraftSpan appends at the draft end with the CAS revision', () => {
@@ -227,16 +274,48 @@ test('apply registers the attach source; codec serializes the rich model form', 
   assert.equal(browser.state.notifies.filter((n) => n.level === 'info').length, 0)
 })
 
-test('registers the attach strip into conversation.input.dock', () => {
+test('registers the attach strip into conversation.input.dock at composer width', async () => {
+  const created = []
+  const React = {
+    useState: (value) => [value, () => {}],
+    useEffect: (fn) => {
+      fn()
+      return undefined
+    },
+    createElement: (type, props, ...children) => {
+      created.push({ type, props: props || {}, children })
+      return { type, props: props || {}, children }
+    },
+  }
   const browser = stubBrowser()
   const { ctx } = stubCtx(browser)
-  build({ React: {}, Core }).apply(ctx)
+  build({ React, Core }).apply(ctx)
   assert.equal(browser.state.slots.length, 1)
   const slot = browser.state.slots[0]
   assert.equal(slot.name, 'conversation.input.dock')
   assert.equal(slot.options.name, 'conversation.input.dock')
   assert.equal(slot.options.id, 'file-attach')
   assert.equal(typeof slot.component, 'function')
+  browser.listeners.get('drop')({
+    dataTransfer: { types: ['Files'], files: [fileLike('a.pdf', 'application/pdf', 5)] },
+    preventDefault: () => { browser.state.prevented = true },
+    stopPropagation: () => { browser.state.stopped = true },
+  })
+  await tick()
+  await tick()
+  created.length = 0
+  const Dock = browser.state.slots[0].component
+  Dock({ sessionId: 's1', attach: () => {} })
+  const root = created.find((node) => (
+    node.props.style
+    && typeof node.props.style.maxWidth === 'string'
+    && node.props.style.maxWidth.includes('--dsh-composer-card-max-width')
+  ))
+  assert.ok(root, 'dock root rendered')
+  assert.match(root.props.style.maxWidth, /--dsh-composer-card-max-width/)
+  assert.equal(root.props.style.width, '100%')
+  assert.equal(root.props.style.marginLeft, 'auto')
+  assert.equal(root.props.style.marginRight, 'auto')
 })
 
 test('image-only drops are claimed by this plugin', async () => {

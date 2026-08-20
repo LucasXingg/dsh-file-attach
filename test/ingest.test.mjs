@@ -9,6 +9,8 @@ import {
   resolveDshHome,
   vaultUploadDir,
   modelForm,
+  displayForm,
+  stripExtractForDisplay,
   humanSize,
   chunkPlan,
   parseAttachLine,
@@ -76,6 +78,20 @@ test('modelForm: extract text is fenced; no vault path; degraded form names the 
   assert.match(degraded, /id=ab12cd34/)
   assert.match(degraded, /attach_\*/)
   assert.doesNotMatch(degraded, /attachments\/|file-attach/)
+})
+
+test('displayForm and stripExtractForDisplay hide extract from the UI projection', () => {
+  const meta = {
+    id: 'ab12cd34',
+    name: 'report.pdf',
+    size: 2.4 * 1024 * 1024,
+    extract: { kind: 'pdf', text: 'Hello PDF', truncated: false, notes: [] },
+  }
+  const shown = displayForm(meta)
+  assert.equal(shown, '[attached file "report.pdf" (2.4 MB) id=ab12cd34]')
+  assert.doesNotMatch(shown, /Hello PDF|extracted content/)
+  const stripped = stripExtractForDisplay('Ask about this\n' + modelForm(meta))
+  assert.equal(stripped, 'Ask about this\n[attached file "report.pdf" (2.4 MB) id=ab12cd34]')
 })
 
 test('humanSize formats byte counts compactly', () => {
