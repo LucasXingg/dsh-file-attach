@@ -1,4 +1,13 @@
+<p align="center">
+  <img src="docs/assets/cover.jpg" alt="dsh-file-attach — Files in. Context ready." width="100%">
+</p>
+
 # dsh-file-attach
+
+[![CI](https://github.com/lucadxingg/unified-file-reader/actions/workflows/ci.yml/badge.svg)](https://github.com/lucadxingg/unified-file-reader/actions/workflows/ci.yml)
+[![GitHub release](https://img.shields.io/github/v/release/lucadxingg/unified-file-reader)](https://github.com/lucadxingg/unified-file-reader/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![DSH plugin](https://img.shields.io/badge/topic-dsh--plugin-6f5cff)](https://github.com/topics/dsh-plugin)
 
 Drag-and-drop **any file type** into a DSH conversation — PDF, Office
 (DOCX / PPTX / XLSX), raster images, and plain text / code files (`.py`,
@@ -14,6 +23,16 @@ This is a dual-half bundle: one npm package that ships a **host plugin** (the
 ingest HTTP routes + tools, package `main` → `lib/index.js`) and a **web
 client half** (`dsh.client` + `exports["./client"]` → `lib/client.js`, served
 by the web shell at `/plugins/<id>/client.js`).
+
+## Highlights
+
+- One drop target for documents, spreadsheets, notebooks, source code, and images.
+- Native DSH vision for image-capable models, with OCR/extraction fallback for
+  text-only models.
+- Chunked uploads, progress feedback, configurable limits, and session-scoped
+  storage outside the agent workspace.
+- Focused `attach_*` tools for saving originals, inspecting notebook output,
+  OCRing individual PDF pages, and describing images.
 
 ## How it works
 
@@ -39,11 +58,12 @@ plugin OCR / explain extract so the model still sees the picture as text.
 
 ## Install
 
-The bundle installs into a profile with the documented community flow:
+Requires Node.js 22.13 or newer and a DSH installation. Download and extract a
+tarball from [GitHub Releases](https://github.com/lucadxingg/unified-file-reader/releases),
+or clone this repository, then install the extracted project directory:
 
 ```sh
-# from the directory containing this package
-dsh plugin --profile <profile-name> add .
+dsh plugin --profile <profile-name> add /path/to/dsh-file-attach
 ```
 
 The patch (`cordis.patch.yml`) inserts one row (`id: file-attach`) which both
@@ -117,10 +137,29 @@ description.
 ## Development
 
 ```sh
-npm install
+npm ci
 npm test
 npm run build:client   # regenerate lib/client.js from src/
 ```
+
+Pull requests run the same tests on Node.js 22 and 24. To inspect the exact
+artifact that a tagged GitHub release will publish:
+
+```sh
+npm pack --dry-run
+```
+
+## Releases
+
+Releases follow semantic versioning and are recorded in
+[CHANGELOG.md](CHANGELOG.md). Update the changelog and `version` in
+`package.json` and `package-lock.json`, commit the change, then push a matching
+`v*` tag (for example, `v0.1.0`). The release workflow tests the tag, verifies
+that the generated client bundle is current, packs the npm tarball, and
+publishes it to GitHub Releases with generated notes.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidance and
+[SECURITY.md](SECURITY.md) for private vulnerability reporting.
 
 Layout:
 
