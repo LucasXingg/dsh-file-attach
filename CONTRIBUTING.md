@@ -7,8 +7,8 @@ Thanks for helping improve `dsh-file-attach`.
 You need Node.js 22.13 or newer.
 
 ```sh
-git clone https://github.com/lucadxingg/unified-file-reader.git
-cd unified-file-reader
+git clone https://github.com/LucasXingg/dsh-file-attach.git
+cd dsh-file-attach
 npm ci
 npm test
 ```

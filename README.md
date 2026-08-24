@@ -9,8 +9,8 @@
   <a href="README.zh-CN.md">简体中文</a>
 </p>
 
-[![CI](https://github.com/lucadxingg/unified-file-reader/actions/workflows/ci.yml/badge.svg)](https://github.com/lucadxingg/unified-file-reader/actions/workflows/ci.yml)
-[![GitHub release](https://img.shields.io/github/v/release/lucadxingg/unified-file-reader)](https://github.com/lucadxingg/unified-file-reader/releases)
+[![CI](https://github.com/LucasXingg/dsh-file-attach/actions/workflows/ci.yml/badge.svg)](https://github.com/LucasXingg/dsh-file-attach/actions/workflows/ci.yml)
+[![GitHub release](https://img.shields.io/github/v/release/LucasXingg/dsh-file-attach)](https://github.com/LucasXingg/dsh-file-attach/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![DSH plugin](https://img.shields.io/badge/topic-dsh--plugin-6f5cff)](https://github.com/topics/dsh-plugin)
 
@@ -46,9 +46,15 @@ but their prompt extract is only a “no text extractor” note.
 - Node.js 22.13 or newer.
 - DSH with the Cordis host and web client plugin system.
 
-Download and extract the package from
-[GitHub Releases](https://github.com/lucadxingg/unified-file-reader/releases),
-or clone this repository, then install that directory into a profile:
+Install from GitHub into a DSH profile:
+
+```sh
+dsh plugin --profile <profile-name> add github:LucasXingg/dsh-file-attach
+```
+
+Alternatively, download the package from
+[GitHub Releases](https://github.com/LucasXingg/dsh-file-attach/releases)
+or clone this repository, then add that directory:
 
 ```sh
 dsh plugin --profile <profile-name> add /path/to/dsh-file-attach
