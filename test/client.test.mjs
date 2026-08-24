@@ -146,6 +146,7 @@ function stubBrowser({ visual = false } = {}) {
     bailCalls: [],
     notifies: [],
     sources: [],
+    commands: [],
     slots: [],
     visual,
     draftImages: [],
@@ -225,6 +226,7 @@ function stubCtx(browser) {
       list: { getSnapshot: () => ({ current: 's1' }) },
       scope: (id) => (id === 's1' ? actx : undefined),
       sessionOf: () => session,
+      subagentAddress: () => undefined,
     },
     conversation: {
       input: { for: () => input },
@@ -248,6 +250,12 @@ function stubCtx(browser) {
       return undefined
     },
     inputTriggers: { registerSource: (source) => { browser.state.sources.push(source); return () => {} } },
+    commandUi: {
+      register: (contribution) => {
+        browser.state.commands.push(contribution)
+        return () => {}
+      },
+    },
     slots: {
       inject: (name, callback) => {
         browser.state.slots.push({ name, options: null, component: null })
@@ -284,13 +292,15 @@ test('apply registers the attach source; codec serializes the rich model form', 
   const { ctx } = stubCtx(browser)
   const plugin = build({ React: {}, Core })
   assert.equal(plugin.name, 'file-attach')
-  assert.deepEqual(plugin.inject, ['slots', 'locale', 'inputTriggers', 'sessions', 'conversation'])
+  assert.deepEqual(plugin.inject, ['slots', 'locale', 'inputTriggers', 'sessions', 'conversation', 'commandUi'])
   plugin.apply(ctx)
 
   const source = browser.state.sources[0]
   assert.equal(source.trigger, '/')
   assert.equal(source.name, 'attach')
   assert.equal(typeof source.codec, 'object')
+  assert.equal(browser.state.commands.length, 1)
+  assert.equal(browser.state.commands[0].name, 'attach')
 
   // Drive a drop: upload is stubbed to resolve a file meta, then a chip is
   // inserted through the scoped input event.

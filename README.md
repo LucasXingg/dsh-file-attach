@@ -46,18 +46,22 @@ but their prompt extract is only a “no text extractor” note.
 - Node.js 22.13 or newer.
 - DSH with the Cordis host and web client plugin system.
 
-Install from GitHub into a DSH profile:
+Install from this GitHub repository into the `web` profile:
 
 ```sh
-dsh plugin --profile <profile-name> add github:LucasXingg/dsh-file-attach
+npx @deepseek-ai/dsh plugin --profile web add github:LucasXingg/dsh-file-attach
 ```
+
+Do **not** run `add dsh-file-attach`. That npm name is a different plugin
+(`dsh-file-attach@1.0.0`) and will not provide drag-and-drop or `/attach`.
 
 Alternatively, download the package from
 [GitHub Releases](https://github.com/LucasXingg/dsh-file-attach/releases)
-or clone this repository, then add that directory:
+or clone this repository, run `npm ci` in the checkout, then add that
+directory:
 
 ```sh
-dsh plugin --profile <profile-name> add /path/to/dsh-file-attach
+npx @deepseek-ai/dsh plugin --profile web add /path/to/dsh-file-attach
 ```
 
 Restart `dsh web` and refresh the browser after installation. The running GUI
