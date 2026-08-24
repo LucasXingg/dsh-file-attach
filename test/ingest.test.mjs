@@ -2,6 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   classifyFile,
+  isRasterImage,
+  rasterMediaType,
+  partitionIntake,
+  modelSupportsVisual,
   sanitizeFileName,
   sanitizeSessionId,
   checkAdmission,
@@ -18,12 +22,37 @@ import {
 
 test('classifyFile: built-in raster MIMEs are image, everything else is file', () => {
   assert.equal(classifyFile('image/png'), 'image')
-  assert.equal(classifyFile('image/jpeg'), 'image')
-  assert.equal(classifyFile('image/webp'), 'image')
   assert.equal(classifyFile('image/gif'), 'image')
   assert.equal(classifyFile('application/pdf'), 'file')
   assert.equal(classifyFile('text/x-python'), 'file')
   assert.equal(classifyFile(''), 'file')
+})
+
+test('isRasterImage and rasterMediaType honor MIME and filename extension', () => {
+  assert.equal(isRasterImage({ mime: 'image/png', name: 'a.bin' }), true)
+  assert.equal(isRasterImage({ mime: 'application/octet-stream', name: 'shot.PNG' }), true)
+  assert.equal(isRasterImage({ mime: 'application/pdf', name: 'doc.pdf' }), false)
+  assert.equal(rasterMediaType({ mime: 'image/webp', name: 'x' }), 'image/webp')
+  assert.equal(rasterMediaType({ mime: '', name: 'photo.jpeg' }), 'image/jpeg')
+  assert.equal(rasterMediaType({ mime: '', name: 'notes.txt' }), undefined)
+})
+
+test('partitionIntake splits rasters from other files', () => {
+  const { images, others } = partitionIntake([
+    { name: 'a.png', type: 'image/png' },
+    { name: 'b.pdf', type: 'application/pdf' },
+    { name: 'c.jpg', type: '' },
+  ])
+  assert.deepEqual(images.map((f) => f.name), ['a.png', 'c.jpg'])
+  assert.deepEqual(others.map((f) => f.name), ['b.pdf'])
+})
+
+test('modelSupportsVisual is true only for an explicit image modality', () => {
+  assert.equal(modelSupportsVisual({ inputModalities: ['text', 'image'] }), true)
+  assert.equal(modelSupportsVisual({ inputModalities: ['image'] }), true)
+  assert.equal(modelSupportsVisual({ inputModalities: ['text'] }), false)
+  assert.equal(modelSupportsVisual({}), false)
+  assert.equal(modelSupportsVisual(undefined), false)
 })
 
 test('sanitizeFileName: strips paths, control chars, leading dots; caps length; falls back', () => {

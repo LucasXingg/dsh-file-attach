@@ -26,6 +26,20 @@ test('Core.classifyFile mirrors the built-in image MIME set', () => {
   assert.equal(Core.classifyFile(''), 'file')
 })
 
+test('Core.partitionIntake and modelSupportsVisual gate the native vision path', () => {
+  const { images, others } = Core.partitionIntake([
+    { name: 'a.png', type: 'image/png' },
+    { name: 'b.pdf', type: 'application/pdf' },
+  ])
+  assert.deepEqual(images.map((f) => f.name), ['a.png'])
+  assert.deepEqual(others.map((f) => f.name), ['b.pdf'])
+  assert.equal(Core.isRasterImage({ name: 'shot.jpg', type: '' }), true)
+  assert.equal(Core.rasterMediaType({ name: 'shot.jpg', type: '' }), 'image/jpeg')
+  assert.equal(Core.modelSupportsVisual({ inputModalities: ['text', 'image'] }), true)
+  assert.equal(Core.modelSupportsVisual({ inputModalities: ['text'] }), false)
+  assert.equal(Core.modelSupportsVisual({}), false)
+})
+
 test('Core.humanSize formats compactly', () => {
   assert.equal(Core.humanSize(0), '0 B')
   assert.equal(Core.humanSize(1024), '1.0 KB')
@@ -121,7 +135,7 @@ test('Core.chunkPlan splits byte ranges', () => {
 // ── plugin behavior with stubbed ctx and browser ────────────────────────────
 
 /** Minimal browser/document/fetch stand-ins for apply(). */
-function stubBrowser() {
+function stubBrowser({ visual = false } = {}) {
   const listeners = new Map()
   const state = {
     prevented: false,
@@ -133,6 +147,8 @@ function stubBrowser() {
     notifies: [],
     sources: [],
     slots: [],
+    visual,
+    draftImages: [],
   }
   const Event = class Event {
     constructor(type) { this.type = type }
@@ -154,6 +170,9 @@ function stubBrowser() {
     state.fetches.push({ url, options })
     if (String(url).includes('/config')) {
       return { ok: true, json: async () => ({ maxFileBytes: 12345, maxFilesPerMessage: 3, vaultDir: 'file-attach' }) }
+    }
+    if (String(url).includes('/vision')) {
+      return { ok: true, json: async () => ({ visual: state.visual }) }
     }
     if (String(url).includes('/extract')) {
       return { ok: true, json: async () => ({ kind: 'text', text: 'reloaded-extract', truncated: false, notes: [] }) }
@@ -183,6 +202,11 @@ function stubCtx(browser) {
   const input = {
     state: { getSnapshot: () => ({ draft: 'hello', draftRev: 3, phase: 'plain' }) },
     notify(level, text) { browser.state.notifies.push({ level, text }) },
+    addImages(ids) {
+      browser.state.draftImages.push(...ids)
+      return true
+    },
+    setDraft(text) { this.state = { getSnapshot: () => ({ draft: text, draftRev: 4, phase: 'plain' }) } },
   }
   const session = {
     prompt: async (content, mode) => {
@@ -200,7 +224,13 @@ function stubCtx(browser) {
       scope: (id) => (id === 's1' ? actx : undefined),
       sessionOf: () => session,
     },
-    conversation: { input: { for: () => input } },
+    conversation: {
+      input: { for: () => input },
+      createDraftImages(files) {
+        return files.map((file, index) => ({ id: 'img-' + index, file }))
+      },
+      releaseDraftImages() {},
+    },
     inputTriggers: { registerSource: (source) => { browser.state.sources.push(source); return () => {} } },
     slots: {
       inject: (name, callback) => {
@@ -255,6 +285,7 @@ test('apply registers the attach source; codec serializes the rich model form', 
   })
   await tick()
   await tick()
+  await tick()
 
   assert.equal(browser.state.prevented, true)
   assert.equal(browser.state.stopped, true)
@@ -303,6 +334,7 @@ test('registers the attach strip into conversation.input.dock at composer width'
   })
   await tick()
   await tick()
+  await tick()
   created.length = 0
   const Dock = browser.state.slots[0].component
   Dock({ sessionId: 's1', attach: () => {} })
@@ -318,7 +350,7 @@ test('registers the attach strip into conversation.input.dock at composer width'
   assert.equal(root.props.style.marginRight, 'auto')
 })
 
-test('image-only drops are claimed by this plugin', async () => {
+test('image-only drops are claimed by this plugin when the model is not visual', async () => {
   const browser = stubBrowser()
   const { ctx } = stubCtx(browser)
   build({ React: {}, Core }).apply(ctx)
@@ -329,10 +361,75 @@ test('image-only drops are claimed by this plugin', async () => {
   })
   await tick()
   await tick()
+  await tick()
   assert.equal(browser.state.prevented, true)
   assert.equal(browser.state.stopped, true)
   assert.equal(browser.state.bailCalls.length, 1)
   assert.equal(browser.state.bailCalls[0].payload.reference.label, 'photo.png')
+  assert.equal(browser.state.draftImages.length, 0)
+})
+
+test('image-only drops use the built-in vision pipeline when the model is visual', async () => {
+  const browser = stubBrowser({ visual: true })
+  const { ctx } = stubCtx(browser)
+  build({ React: {}, Core }).apply(ctx)
+  browser.listeners.get('drop')({
+    dataTransfer: { types: ['Files'], files: [fileLike('photo.png', 'image/png', 5)] },
+    preventDefault: () => { browser.state.prevented = true },
+    stopPropagation: () => { browser.state.stopped = true },
+  })
+  await tick()
+  await tick()
+  await tick()
+  assert.equal(browser.state.prevented, true)
+  assert.equal(browser.state.draftImages.length, 1)
+  assert.equal(browser.state.draftImages[0], 'img-0')
+  assert.equal(browser.state.bailCalls.length, 0, 'native vision path does not insert an attach chip')
+  assert.equal(
+    browser.state.fetches.filter((f) => String(f.url).includes('/upload')).length,
+    0,
+    'native vision path does not upload through the plugin',
+  )
+})
+
+test('mixed drops on a visual model send images native and files through the plugin', async () => {
+  const browser = stubBrowser({ visual: true })
+  const { ctx } = stubCtx(browser)
+  build({ React: {}, Core }).apply(ctx)
+  browser.listeners.get('drop')({
+    dataTransfer: {
+      types: ['Files'],
+      files: [fileLike('photo.png', 'image/png', 5), fileLike('notes.pdf', 'application/pdf', 5)],
+    },
+    preventDefault: () => { browser.state.prevented = true },
+    stopPropagation: () => { browser.state.stopped = true },
+  })
+  await tick()
+  await tick()
+  await tick()
+  assert.equal(browser.state.draftImages.length, 1)
+  assert.equal(browser.state.bailCalls.length, 1)
+  assert.equal(browser.state.bailCalls[0].payload.reference.label, 'notes.pdf')
+})
+
+test('image paste uses the plugin when the model is not visual', async () => {
+  const browser = stubBrowser()
+  const { ctx } = stubCtx(browser)
+  build({ React: {}, Core }).apply(ctx)
+  browser.listeners.get('paste')({
+    clipboardData: {
+      items: [{ kind: 'file', getAsFile: () => fileLike('clip.png', 'image/png', 5) }],
+      getData: () => '',
+    },
+    preventDefault: () => { browser.state.prevented = true },
+    stopPropagation: () => { browser.state.stopped = true },
+  })
+  await tick()
+  await tick()
+  await tick()
+  assert.equal(browser.state.bailCalls.length, 1)
+  assert.equal(browser.state.bailCalls[0].payload.reference.label, 'clip.png')
+  assert.equal(browser.state.draftImages.length, 0)
 })
 
 test('mixed drops attach every file including images', async () => {
@@ -387,6 +484,7 @@ test('oversized drops are rejected with a toast and no chip', async () => {
     preventDefault: () => { browser.state.prevented = true },
     stopPropagation: () => { browser.state.stopped = true },
   })
+  await tick()
   await tick()
   assert.equal(browser.state.bailCalls.length, 0)
   assert.ok(browser.state.notifies.some((n) => n.level === 'error' && /tooLarge/.test(n.text)))

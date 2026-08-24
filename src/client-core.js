@@ -9,10 +9,54 @@
  */
 var FileAttachCore = (function () {
   var IMAGE_MEDIA_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
+  var IMAGE_EXTENSIONS = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' }
+
+  function extensionOfName(name) {
+    var base = String(name == null ? '' : name).replace(/\\/g, '/').split('/').pop() || ''
+    var dot = base.lastIndexOf('.')
+    return dot <= 0 ? '' : base.slice(dot + 1).toLowerCase()
+  }
 
   /** 'image' for raster MIMEs, else 'file'. */
   function classifyFile(mime) {
     return IMAGE_MEDIA_TYPES.indexOf(mime) !== -1 ? 'image' : 'file'
+  }
+
+  /** True when declared MIME or filename is a PNG/JPEG/WebP/GIF raster. */
+  function isRasterImage(file) {
+    if (file == null) return false
+    var mime = file.type || file.mime
+    if (IMAGE_MEDIA_TYPES.indexOf(mime) !== -1) return true
+    return Object.prototype.hasOwnProperty.call(IMAGE_EXTENSIONS, extensionOfName(file.name))
+  }
+
+  /** Canonical raster MIME from declared type or filename extension. */
+  function rasterMediaType(file) {
+    if (file == null) return undefined
+    var mime = file.type || file.mime
+    if (IMAGE_MEDIA_TYPES.indexOf(mime) !== -1) return mime
+    var mapped = IMAGE_EXTENSIONS[extensionOfName(file.name)]
+    return mapped === undefined ? undefined : mapped
+  }
+
+  /** Split a File-like list into rasters vs everything else. */
+  function partitionIntake(files) {
+    var images = []
+    var others = []
+    var list = files == null ? [] : files
+    for (var i = 0; i < list.length; i += 1) {
+      if (isRasterImage(list[i])) images.push(list[i])
+      else others.push(list[i])
+    }
+    return { images: images, others: others }
+  }
+
+  /**
+   * True only when the catalog entry explicitly lists `image` input.
+   * Missing inputModalities is unknown, not visual.
+   */
+  function modelSupportsVisual(info) {
+    return info != null && Array.isArray(info.inputModalities) && info.inputModalities.indexOf('image') !== -1
   }
 
   /** Compact human-readable byte count (e.g. "2.4 MB"). */
@@ -166,6 +210,10 @@ var FileAttachCore = (function () {
 
   return {
     classifyFile: classifyFile,
+    isRasterImage: isRasterImage,
+    rasterMediaType: rasterMediaType,
+    partitionIntake: partitionIntake,
+    modelSupportsVisual: modelSupportsVisual,
     humanSize: humanSize,
     displayForm: displayForm,
     modelForm: modelForm,
