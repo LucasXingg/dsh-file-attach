@@ -46,9 +46,15 @@ but their prompt extract is only a “no text extractor” note.
 - Node.js 22.13 or newer.
 - DSH with the Cordis host and web client plugin system.
 
-Download and extract the package from
-[GitHub Releases](https://github.com/LucasXingg/dsh-file-attach/releases),
-or clone this repository, then install that directory into a profile:
+Install from GitHub into a DSH profile:
+
+```sh
+dsh plugin --profile <profile-name> add github:LucasXingg/dsh-file-attach
+```
+
+Alternatively, download the package from
+[GitHub Releases](https://github.com/LucasXingg/dsh-file-attach/releases)
+or clone this repository, then add that directory:
 
 ```sh
 dsh plugin --profile <profile-name> add /path/to/dsh-file-attach

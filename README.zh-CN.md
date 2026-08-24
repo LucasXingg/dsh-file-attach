@@ -41,8 +41,14 @@
 - Node.js 22.13 或更高版本。
 - 带 Cordis 宿主和网页客户端插件系统的 DSH。
 
-从 [GitHub Releases](https://github.com/LucasXingg/dsh-file-attach/releases)
-下载并解压，或克隆本仓库，然后把该目录安装到 DSH profile：
+从 GitHub 安装到 DSH profile：
+
+```sh
+dsh plugin --profile <profile-name> add github:LucasXingg/dsh-file-attach
+```
+
+也可以从 [GitHub Releases](https://github.com/LucasXingg/dsh-file-attach/releases)
+下载并解压，或克隆本仓库，然后把该目录加到 profile：
 
 ```sh
 dsh plugin --profile <profile-name> add /path/to/dsh-file-attach
