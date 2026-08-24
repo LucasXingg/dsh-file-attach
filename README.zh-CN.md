@@ -9,8 +9,8 @@
   <a href="README.zh-CN.md">简体中文</a>
 </p>
 
-[![CI](https://github.com/lucadxingg/unified-file-reader/actions/workflows/ci.yml/badge.svg)](https://github.com/lucadxingg/unified-file-reader/actions/workflows/ci.yml)
-[![GitHub release](https://img.shields.io/github/v/release/lucadxingg/unified-file-reader)](https://github.com/lucadxingg/unified-file-reader/releases)
+[![CI](https://github.com/LucasXingg/dsh-file-attach/actions/workflows/ci.yml/badge.svg)](https://github.com/LucasXingg/dsh-file-attach/actions/workflows/ci.yml)
+[![GitHub release](https://img.shields.io/github/v/release/LucasXingg/dsh-file-attach)](https://github.com/LucasXingg/dsh-file-attach/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![DSH plugin](https://img.shields.io/badge/topic-dsh--plugin-6f5cff)](https://github.com/topics/dsh-plugin)
 
@@ -41,7 +41,7 @@
 - Node.js 22.13 或更高版本。
 - 带 Cordis 宿主和网页客户端插件系统的 DSH。
 
-从 [GitHub Releases](https://github.com/lucadxingg/unified-file-reader/releases)
+从 [GitHub Releases](https://github.com/LucasXingg/dsh-file-attach/releases)
 下载并解压，或克隆本仓库，然后把该目录安装到 DSH profile：
 
 ```sh
