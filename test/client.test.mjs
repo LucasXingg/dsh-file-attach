@@ -172,7 +172,9 @@ function stubBrowser({ visual = false } = {}) {
       return { ok: true, json: async () => ({ maxFileBytes: 12345, maxFilesPerMessage: 3, vaultDir: 'file-attach' }) }
     }
     if (String(url).includes('/vision')) {
-      return { ok: true, json: async () => ({ visual: state.visual }) }
+      const model = options.headers && options.headers['x-model']
+      const visual = state.visual || (typeof model === 'string' && /vision/i.test(model))
+      return { ok: true, json: async () => ({ visual, model: model || undefined }) }
     }
     if (String(url).includes('/extract')) {
       return { ok: true, json: async () => ({ kind: 'text', text: 'reloaded-extract', truncated: false, notes: [] }) }
@@ -230,6 +232,20 @@ function stubCtx(browser) {
         return files.map((file, index) => ({ id: 'img-' + index, file }))
       },
       releaseDraftImages() {},
+    },
+    get(name) {
+      if (name === 'modelDirectories') {
+        return {
+          directoryFor: () => ({
+            store: {
+              getSnapshot: () => ({
+                current: browser.state.selection || null,
+              }),
+            },
+          }),
+        }
+      }
+      return undefined
     },
     inputTriggers: { registerSource: (source) => { browser.state.sources.push(source); return () => {} } },
     slots: {
@@ -410,6 +426,27 @@ test('mixed drops on a visual model send images native and files through the plu
   assert.equal(browser.state.draftImages.length, 1)
   assert.equal(browser.state.bailCalls.length, 1)
   assert.equal(browser.state.bailCalls[0].payload.reference.label, 'notes.pdf')
+})
+
+test('composer model-seat selection is sent on the vision lookup', async () => {
+  const browser = stubBrowser()
+  browser.state.selection = { provider: 'deepseek', model: 'flash-vision-exp' }
+  const { ctx } = stubCtx(browser)
+  build({ React: {}, Core }).apply(ctx)
+  browser.listeners.get('drop')({
+    dataTransfer: { types: ['Files'], files: [fileLike('photo.png', 'image/png', 5)] },
+    preventDefault: () => { browser.state.prevented = true },
+    stopPropagation: () => { browser.state.stopped = true },
+  })
+  await tick()
+  await tick()
+  await tick()
+  const vision = browser.state.fetches.find((f) => String(f.url).includes('/vision'))
+  assert.ok(vision, 'vision lookup ran')
+  assert.equal(vision.options.headers['x-model'], 'flash-vision-exp')
+  assert.equal(vision.options.headers['x-provider'], 'deepseek')
+  assert.equal(browser.state.draftImages.length, 1, 'hinted vision model uses the native rail')
+  assert.equal(browser.state.bailCalls.length, 0)
 })
 
 test('image paste uses the plugin when the model is not visual', async () => {

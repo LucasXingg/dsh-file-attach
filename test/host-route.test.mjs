@@ -283,7 +283,9 @@ test('vision route is false for text-only models', async () => {
       session: { header: { cwd }, requestHeader: () => undefined },
     },
     llm: {
-      resolveModelInfo: async () => ({ inputModalities: ['text'] }),
+      resolveModelInfo: async (_provider, model) => ({
+        inputModalities: String(model).includes('vision') ? ['text', 'image'] : ['text'],
+      }),
     },
   })
   const response = res()
@@ -293,6 +295,21 @@ test('vision route is false for text-only models', async () => {
   )
   assert.equal(response.statusCode, 200)
   assert.equal(JSON.parse(response.body).visual, false)
+
+  const hinted = res()
+  await h.routes.get('/api/dsh-file-attach/vision').handler(
+    req({
+      method: 'GET',
+      headers: { 'x-session-id': 's1', 'x-provider': 'deepseek', 'x-model': 'flash-vision' },
+    }),
+    hinted,
+  )
+  assert.equal(hinted.statusCode, 200)
+  assert.deepEqual(JSON.parse(hinted.body), {
+    visual: true,
+    provider: 'deepseek',
+    model: 'flash-vision',
+  })
   await cleanupDirs(cwd, dshHome)
 })
 

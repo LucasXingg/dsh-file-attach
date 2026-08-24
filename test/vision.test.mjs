@@ -49,3 +49,29 @@ test('resolveSessionVisual is true only when the catalog lists image input', asy
   assert.equal((await resolveSessionVisual(ctxOf(visualLlm), 'missing')).visual, false)
   assert.equal(modelSupportsVisual({ inputModalities: ['text', 'image'] }), true)
 })
+
+test('resolveSessionVisual prefers a hinted UI selection over agent options', async () => {
+  const agent = {
+    options: { provider: 'deepseek', model: 'flash' },
+    session: { requestHeader: () => undefined },
+  }
+  const llm = {
+    resolveModelInfo: async (provider, model) => ({
+      provider,
+      id: model,
+      inputModalities: model.includes('vision') ? ['text', 'image'] : ['text'],
+    }),
+  }
+  const ctx = {
+    get: (name) => {
+      if (name === 'agents') return { get: () => agent }
+      if (name === 'llm') return llm
+      return undefined
+    },
+  }
+  assert.equal((await resolveSessionVisual(ctx, 's1')).visual, false)
+  assert.deepEqual(
+    await resolveSessionVisual(ctx, 's1', { provider: 'deepseek', model: 'flash-vision' }),
+    { visual: true, provider: 'deepseek', model: 'flash-vision' },
+  )
+})
