@@ -16,17 +16,19 @@ setRecognizeImage(async () => 'stub-ocr')
  * Readable + minimal ServerResponse stand-in, so the route handlers run for
  * real (headers, chunk assembly, fs writes, atomic rename, JSON responses).
  */
-function harness({ cwd, dshHome, config = {} }) {
+function harness({ cwd, dshHome, config = {}, llm, agent }) {
   const routes = new Map()
   const disposers = []
   const tools = []
+  const liveAgent = agent ?? { session: { header: { cwd } } }
   const ctx = {
     get(name) {
       if (name === 'agents') {
         return {
-          get: (id) => (id === 's1' ? { session: { header: { cwd } } } : undefined),
+          get: (id) => (id === 's1' ? liveAgent : undefined),
         }
       }
+      if (name === 'llm') return llm
       return undefined
     },
     webServer: {
@@ -115,6 +117,7 @@ test('host plugin registers the three routes and teardown removes them', async (
     '/api/dsh-file-attach/config',
     '/api/dsh-file-attach/extract',
     '/api/dsh-file-attach/upload',
+    '/api/dsh-file-attach/vision',
   ])
   assert.equal(h.tools.length, 4)
   assert.equal(h.disposers.length, 1)
@@ -226,6 +229,87 @@ test('config route reports the deployment limits', async () => {
   assert.equal(body.maxFileBytes, 123)
   assert.equal(body.vaultDir, 'file-attach')
   assert.equal(body.uploadDir, undefined)
+  await cleanupDirs(cwd, dshHome)
+})
+
+test('vision route reports explicit image-input models as visual', async () => {
+  const { cwd, dshHome } = await withDirs()
+  const h = harness({
+    cwd,
+    dshHome,
+    agent: {
+      options: { provider: 'deepseek', model: 'flash-vision' },
+      session: {
+        header: { cwd },
+        requestHeader: () => ({ config: { provider: 'deepseek', model: 'flash-vision' } }),
+      },
+    },
+    llm: {
+      resolveModelInfo: async (provider, model) => ({
+        provider,
+        id: model,
+        inputModalities: ['text', 'image'],
+      }),
+    },
+  })
+  const route = h.routes.get('/api/dsh-file-attach/vision')
+  const ok = res()
+  await route.handler(req({ method: 'GET', headers: { 'x-session-id': 's1' } }), ok)
+  assert.equal(ok.statusCode, 200)
+  assert.deepEqual(JSON.parse(ok.body), {
+    visual: true,
+    provider: 'deepseek',
+    model: 'flash-vision',
+  })
+
+  const missing = res()
+  await route.handler(req({ method: 'GET' }), missing)
+  assert.equal(missing.statusCode, 400)
+  assert.equal(JSON.parse(missing.body).error.code, 'missing-session')
+
+  const unknown = res()
+  await route.handler(req({ method: 'GET', headers: { 'x-session-id': 'nope' } }), unknown)
+  assert.equal(unknown.statusCode, 404)
+  await cleanupDirs(cwd, dshHome)
+})
+
+test('vision route is false for text-only models', async () => {
+  const { cwd, dshHome } = await withDirs()
+  const h = harness({
+    cwd,
+    dshHome,
+    agent: {
+      options: { provider: 'deepseek', model: 'flash' },
+      session: { header: { cwd }, requestHeader: () => undefined },
+    },
+    llm: {
+      resolveModelInfo: async (_provider, model) => ({
+        inputModalities: String(model).includes('vision') ? ['text', 'image'] : ['text'],
+      }),
+    },
+  })
+  const response = res()
+  await h.routes.get('/api/dsh-file-attach/vision').handler(
+    req({ method: 'GET', headers: { 'x-session-id': 's1' } }),
+    response,
+  )
+  assert.equal(response.statusCode, 200)
+  assert.equal(JSON.parse(response.body).visual, false)
+
+  const hinted = res()
+  await h.routes.get('/api/dsh-file-attach/vision').handler(
+    req({
+      method: 'GET',
+      headers: { 'x-session-id': 's1', 'x-provider': 'deepseek', 'x-model': 'flash-vision' },
+    }),
+    hinted,
+  )
+  assert.equal(hinted.statusCode, 200)
+  assert.deepEqual(JSON.parse(hinted.body), {
+    visual: true,
+    provider: 'deepseek',
+    model: 'flash-vision',
+  })
   await cleanupDirs(cwd, dshHome)
 })
 

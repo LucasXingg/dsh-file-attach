@@ -3,9 +3,10 @@
 Drag-and-drop **any file type** into a DSH conversation — PDF, Office
 (DOCX / PPTX / XLSX), raster images, and plain text / code files (`.py`,
 `.js`, `.html`, `.ipynb`, `.md`, `.csv`, …). The **host plugin extracts**
-the file (and OCRs / explains images) at upload time and splices that text
+the file (and OCRs / explains images on text-only models) at upload time and splices that text
 into the user message so the model can read it without python-docx / pypdf
-hints. Originals live under `$DSH_HOME/file-attach/<sessionId>/<id>/`
+hints. Raster images take DSH's built-in composer vision path when the current
+model declares `image` input; otherwise they use this extract path. Originals live under `$DSH_HOME/file-attach/<sessionId>/<id>/`
 (outside the session workspace). The model sees extract text; `attach_save`
 is the only way to copy a file into the working directory.
 
@@ -18,7 +19,9 @@ by the web shell at `/plugins/<id>/client.js`).
 
 ```
 user drops file or image → capture-phase drop listener (client)
-  → chunked binary upload → POST /api/dsh-file-attach/upload (host)
+  → if the file is a raster image and the current model declares image input:
+       DSH composer vision path (draft thumbnails → ImageBlock on send)
+  → otherwise chunked binary upload → POST /api/dsh-file-attach/upload (host)
        → host writes $DSH_HOME/file-attach/<sessionId>/<id>/<sanitized-name>
        → host extracts text (PDF/Office/notebook/OCR/explain)
        → writes extract.json; returns { id, name, size, extract }
@@ -30,8 +33,9 @@ user drops file or image → capture-phase drop listener (client)
          ----- end -----
 ```
 
-Images are claimed by this plugin (not the built-in ComposerAttachment vision
-path). The model sees OCR text plus an optional short description, not pixels.
+Images use the built-in ComposerAttachment vision path when the session model
+lists `image` in `inputModalities`. Text-only or unknown models keep the
+plugin OCR / explain extract so the model still sees the picture as text.
 
 ## Install
 
@@ -75,7 +79,9 @@ The model form is spliced into the user message at send time:
 
 `id=` is the 12-character hex upload id. Pass that to `attach_*` tools
 (not the filename). A unique original filename is also accepted as `id`.
-Vault paths are never included in the prompt.
+Vault paths are never included in the prompt. The conversation transcript
+hides the `----- extracted content -----` fence and shows the header line
+only; copy/log still contain the model form.
 
 Notebook ingest keeps **the last two lines** of each cell's text output.
 Scanned PDFs with an empty text layer note that and point at
@@ -93,11 +99,17 @@ description.
 
 ## UI
 
-- Drop a file or image anywhere on the page while a session is active → it
-  uploads, is extracted, and a chip appears in the draft.
+- Drop a file or image anywhere on the page while a session is active. Images
+  land on the composer vision rail when the current model is visual; otherwise
+  they upload, extract, and a chip appears in the draft.
 - A strip above the composer (`conversation.input.dock`) lists attached files
   and shows a determinate progress bar while a file is uploading or extracting.
-  An **Add** control on that strip opens the file picker.
+  The strip uses DSH's composer width axis (`--dsh-composer-card-max-width`)
+  so it lines up with the input card. An **Add** control on that strip opens
+  the file picker.
+- After send, the model still receives the extracted-content fence; the
+  conversation UI shows only the `[attached file …]` header (the extract body
+  is stripped before paint).
 - The `/` menu offers an "Attach files…" entry.
 - After a page reload, a persisted `/attach <id>` token is still understood;
   serialize fetches `GET /api/dsh-file-attach/extract` to recover the text.
@@ -116,6 +128,7 @@ Layout:
 lib/index.js          host plugin: routes, extraction at ingest, tools
 lib/extract.js        host extractors (text/PDF/Office/notebook/OCR)
 lib/ingest.js         sanitize / admission / model form / chunk plan / vault paths
+lib/vision.js         current-model visual capability (inputModalities)
 lib/tools.js          attach_* tool definitions
 lib/client.js         web bundle (generated; module-table load handoff)
 src/client-core.js    client pure logic (plain script, inlined)
@@ -131,9 +144,10 @@ test/                 node:test suites
 - **Committed files are not garbage-collected.** Removing a chip does not
   delete the original from the vault. Partial uploads are cleaned up.
 - **Scanned PDFs are not OCR'd at ingest.** Use `attach_pdf_ocr_page` per page.
-- **Image pixels are not sent on the built-in vision path.** The model sees
-  OCR/description text. `attach_describe_image` can start a vision-capable
-  subagent when `ctx.subagents` is mounted.
+- **Image pixels follow the current model.** Visual models (`inputModalities`
+  includes `image`) use DSH's built-in composer image pipeline. Other models
+  still see OCR/description text. `attach_describe_image` can start a
+  vision-capable subagent when `ctx.subagents` is mounted.
 - **Drop is page-wide.** Any drop attaches to the current session.
 - **Trust posture.** Ingest routes are same-origin and verify the session
   exists, but carry no bearer credential. Bind the host to `127.0.0.1`.

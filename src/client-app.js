@@ -7,14 +7,16 @@
  * `env.React` and `env.Core` (FileAttachCore) are provided by the build.
  *
  * What it does:
- *  1. Capture-phase drop interception: every dropped file (including images)
- *     is claimed by this plugin.
+ *  1. Capture-phase drop/paste interception. Raster images go to DSH's built-in
+ *     composer vision path when the current model declares `image` input;
+ *     otherwise they (and every non-image file) use this plugin's extract path.
  *  2. Chunked binary upload to the host half (POST /api/dsh-file-attach/upload).
  *  3. On success, inserts a reference chip into the composer draft through the
  *     scoped `slash/input-insert-reference` event. The host extract is spliced
- *     into the model form at serialize time.
- *  4. A `conversation.input.dock` strip: upload progress + the session's
- *     attached files + an Add picker (no tool-row paperclip).
+ *     into the model form at serialize time. The conversation UI strips the
+ *     extract fence and shows only the `[attached file …]` header.
+ *  4. A `conversation.input.dock` strip aligned to the composer card width:
+ *     upload progress + the session's attached files + an Add picker.
  *  5. A `/attach` input-trigger source whose `matchEnter` recovers a plain-text
  *     `/attach <id>` line after a page reload.
  */
@@ -28,6 +30,7 @@ function buildFileAttachPlugin(env) {
   var ROUTE_ABORT = '/api/dsh-file-attach/abort'
   var ROUTE_CONFIG = '/api/dsh-file-attach/config'
   var ROUTE_EXTRACT = '/api/dsh-file-attach/extract'
+  var ROUTE_VISION = '/api/dsh-file-attach/vision'
   var DEFAULT_LIMITS = {
     maxFileBytes: 50 * 1024 * 1024,
     maxFilesPerMessage: 20,
@@ -78,6 +81,8 @@ function buildFileAttachPlugin(env) {
       var activeUploads = new Set()
       /** Client-mirrored limits (refreshed from the host config route, best effort). */
       var limitsRef = { current: DEFAULT_LIMITS }
+      /** Last vision lookup: `{ sessionId, visual }` so paste can stay synchronous. */
+      var visualCache = { sessionId: null, visual: false }
 
       /** Session-scoped dock rows: uploading / extracting / ready. */
       var dockItems = []
@@ -142,6 +147,128 @@ function buildFileAttachPlugin(env) {
       function toast(sessionId, level, text) {
         var face = sessionFace(sessionId)
         if (face !== undefined) face.input.notify(level, text)
+      }
+
+      // ── current-model visual capability ─────────────────────────────────
+      function composerSelection(sessionId) {
+        var dirs = typeof ctx.get === 'function' ? ctx.get('modelDirectories') : ctx.modelDirectories
+        if (dirs == null || typeof dirs.directoryFor !== 'function') return null
+        try {
+          var store = dirs.directoryFor(sessionId).store
+          var snap = store && typeof store.getSnapshot === 'function' ? store.getSnapshot() : null
+          var current = snap && snap.current
+          if (current == null || typeof current.provider !== 'string' || typeof current.model !== 'string') return null
+          return current
+        } catch {
+          return null
+        }
+      }
+
+      function fetchVisual(sessionId) {
+        if (sessionId === undefined || sessionId === null) {
+          visualCache.sessionId = null
+          visualCache.visual = false
+          return Promise.resolve(false)
+        }
+        var headers = { 'x-session-id': sessionId }
+        var selection = composerSelection(sessionId)
+        if (selection !== null) {
+          headers['x-provider'] = selection.provider
+          headers['x-model'] = selection.model
+        }
+        return fetch(ROUTE_VISION, {
+          method: 'GET',
+          headers: headers,
+        }).then(function (resp) {
+          return resp.ok ? resp.json() : { visual: false }
+        }).then(function (body) {
+          var visual = body !== null && typeof body === 'object' && body.visual === true
+          visualCache.sessionId = sessionId
+          visualCache.visual = visual
+          return visual
+        }).catch(function () {
+          visualCache.sessionId = sessionId
+          visualCache.visual = false
+          return false
+        })
+      }
+
+      /**
+       * Hand rasters to DSH's composer image rail (createDraftImages + addImages).
+       * @returns true when the built-in path accepted the batch.
+       */
+      function addViaDefaultPipeline(sessionId, files) {
+        if (files.length === 0) return true
+        var conversation = ctx.conversation
+        var face = sessionFace(sessionId)
+        if (
+          conversation == null
+          || typeof conversation.createDraftImages !== 'function'
+          || face === undefined
+          || typeof face.input.addImages !== 'function'
+        ) {
+          return false
+        }
+        var prepared = []
+        for (var i = 0; i < files.length; i += 1) {
+          prepared.push(withRasterType(files[i]))
+        }
+        try {
+          var images = conversation.createDraftImages(prepared)
+          if (!face.input.addImages(images.map(function (img) { return img.id }))) {
+            if (typeof conversation.releaseDraftImages === 'function') {
+              conversation.releaseDraftImages(images)
+            }
+            return false
+          }
+          return true
+        } catch {
+          return false
+        }
+      }
+
+      function withRasterType(file) {
+        var mime = Core.rasterMediaType(file)
+        if (mime === undefined || mime === file.type || typeof File !== 'function') return file
+        try {
+          return new File([file], file.name, { type: mime, lastModified: file.lastModified })
+        } catch {
+          return file
+        }
+      }
+
+      /** Images → native vision when the model is visual; otherwise plugin extract. */
+      function routeFiles(sessionId, files) {
+        if (files.length === 0) return
+        void fetchVisual(sessionId).then(function (visual) {
+          var parts = Core.partitionIntake(files)
+          if (visual && parts.images.length > 0) {
+            if (!addViaDefaultPipeline(sessionId, parts.images)) {
+              for (var i = 0; i < parts.images.length; i += 1) intake(sessionId, parts.images[i])
+            }
+          } else {
+            for (var j = 0; j < parts.images.length; j += 1) intake(sessionId, parts.images[j])
+          }
+          for (var k = 0; k < parts.others.length; k += 1) intake(sessionId, parts.others[k])
+        })
+      }
+
+      function filesFromClipboard(clipboard) {
+        var out = []
+        if (clipboard == null) return out
+        var items = clipboard.items
+        if (items != null) {
+          for (var i = 0; i < items.length; i += 1) {
+            if (items[i].kind !== 'file') continue
+            var asFile = typeof items[i].getAsFile === 'function' ? items[i].getAsFile() : null
+            if (asFile != null) out.push(asFile)
+          }
+          if (out.length > 0) return out
+        }
+        var list = clipboard.files
+        if (list == null) return out
+        for (var j = 0; j < list.length; j += 1) out.push(list[j])
+        return out
       }
 
       // ── upload ──────────────────────────────────────────────────────────
@@ -408,9 +535,9 @@ function buildFileAttachPlugin(env) {
         input.onchange = function () {
           var files = input.files
           if (files !== null) {
-            for (var i = 0; i < files.length; i += 1) {
-              intake(sessionId, files[i])
-            }
+            var batch = []
+            for (var i = 0; i < files.length; i += 1) batch.push(files[i])
+            routeFiles(sessionId, batch)
           }
           input.remove()
         }
@@ -448,23 +575,63 @@ function buildFileAttachPlugin(env) {
           console.warn('[file-attach] drop ignored: no active session')
           return
         }
-        for (var j = 0; j < files.length; j += 1) intake(sessionId, files[j])
+        routeFiles(sessionId, files)
+      }
+
+      var onPasteCapture = function (event) {
+        var clipboard = event.clipboardData
+        var files = filesFromClipboard(clipboard)
+        if (files.length === 0) return
+        var parts = Core.partitionIntake(files)
+        if (parts.images.length === 0) return
+        event.preventDefault()
+        event.stopPropagation()
+        var sessionId = currentSessionId()
+        if (sessionId === undefined || sessionId === null) {
+          console.warn('[file-attach] paste ignored: no active session')
+          return
+        }
+        var text = clipboard !== null && clipboard !== undefined && typeof clipboard.getData === 'function'
+          ? clipboard.getData('text/plain')
+          : ''
+        void fetchVisual(sessionId).then(function (visual) {
+          if (visual && parts.images.length > 0) {
+            if (!addViaDefaultPipeline(sessionId, parts.images)) {
+              for (var i = 0; i < parts.images.length; i += 1) intake(sessionId, parts.images[i])
+            }
+          } else {
+            for (var j = 0; j < parts.images.length; j += 1) intake(sessionId, parts.images[j])
+          }
+          for (var k = 0; k < parts.others.length; k += 1) intake(sessionId, parts.others[k])
+          if (typeof text === 'string' && text !== '') {
+            var face = sessionFace(sessionId)
+            if (face !== undefined && typeof face.input.setDraft === 'function') {
+              var draft = face.input.state.getSnapshot().draft || ''
+              face.input.setDraft(draft + text)
+            }
+          }
+        })
       }
 
       document.addEventListener('dragover', onDragOverCapture, true)
       document.addEventListener('drop', onDropCapture, true)
+      document.addEventListener('paste', onPasteCapture, true)
+
+      void fetchVisual(currentSessionId())
 
       // ── dock: progress + file list (conversation.input.dock) ────────────
+      // The dock slot is a full-width row above the composer card. Opt into
+      // DSH's shared composer width axis so the file list matches the card.
+      var aligned = Core.composerAlignedBox()
       var dockStyle = {
-        root: {
+        root: Object.assign({
           display: 'flex',
           flexDirection: 'column',
           gap: '6px',
-          width: '100%',
           padding: '4px 0',
           color: 'var(--dsw-fg, inherit)',
           fontSize: '12px',
-        },
+        }, aligned),
         row: {
           display: 'flex',
           alignItems: 'center',
@@ -598,11 +765,46 @@ function buildFileAttachPlugin(env) {
         }, AttachDock)
       })
 
+      // ── hide extract fences in conversation UI (model form stays intact) ──
+      function hideExtractFromUi(target) {
+        Core.hideExtractInTree(target === undefined || target === null ? document.body : target)
+      }
+
+      var extractObserver = null
+      var extractPoll = null
+      if (typeof MutationObserver === 'function' && document.body !== undefined && document.body !== null) {
+        extractObserver = new MutationObserver(function (records) {
+          for (var r = 0; r < records.length; r += 1) {
+            var record = records[r]
+            if (record.type === 'characterData') {
+              hideExtractFromUi(record.target)
+              continue
+            }
+            var added = record.addedNodes
+            if (added === undefined || added === null) continue
+            for (var n = 0; n < added.length; n += 1) hideExtractFromUi(added[n])
+          }
+        })
+        extractObserver.observe(document.documentElement || document.body, {
+          childList: true,
+          subtree: true,
+          characterData: true,
+        })
+        hideExtractFromUi(document.body)
+        extractPoll = setInterval(function () { hideExtractFromUi(document.body) }, 1000)
+        if (typeof extractPoll === 'object' && extractPoll !== null && typeof extractPoll.unref === 'function') {
+          extractPoll.unref()
+        }
+      }
+
       // ── teardown ──────────────────────────────────────────────────────────
       ctx.effect(function () {
         return function () {
           document.removeEventListener('dragover', onDragOverCapture, true)
           document.removeEventListener('drop', onDropCapture, true)
+          document.removeEventListener('paste', onPasteCapture, true)
+          if (extractObserver !== null) extractObserver.disconnect()
+          if (extractPoll !== null) clearInterval(extractPoll)
           for (var controller of activeUploads) controller.abort()
           activeUploads.clear()
           dockItems = []
