@@ -13,8 +13,9 @@
  *  2. Chunked binary upload to the host half (POST /api/dsh-file-attach/upload).
  *  3. On success, inserts a reference chip into the composer draft through the
  *     scoped `slash/input-insert-reference` event. The host extract is spliced
- *     into the model form at serialize time. The conversation UI strips the
- *     extract fence and shows only the `[attached file …]` header.
+ *     into the model form at serialize time; a scrub over the rendered
+ *     conversation drops the extract fence so only the `[attached file …]`
+ *     header paints (the submitted message keeps the extract).
  *  4. A `conversation.input.dock` strip aligned to the composer card width:
  *     upload progress + the session's attached files + an Add picker.
  *  5. A `/attach` input-trigger source whose `matchEnter` recovers a plain-text
@@ -70,6 +71,78 @@ function buildFileAttachPlugin(env) {
     inject: ['slots', 'locale', 'inputTriggers', 'sessions', 'conversation', 'commandUi'],
 
     apply: function apply(ctx) {
+      // ── hide extract fences in conversation UI (model form stays intact) ──
+      // First in apply: keeping the extract out of the rendered transcript must
+      // not depend on any other registration in this plugin succeeding.
+      var extractObserver = null
+      var extractPoll = null
+
+      function scrubTarget() {
+        if (typeof document === 'undefined' || document === null) return null
+        var body = document.body
+        if (body !== undefined && body !== null) return body
+        var root = document.documentElement
+        return root === undefined || root === null ? null : root
+      }
+
+      function hideExtractFromUi(target) {
+        var root = target === undefined || target === null ? scrubTarget() : target
+        if (root === null) return
+        Core.hideExtractInTree(root)
+      }
+
+      /** Cheap per-record test: does this mutation carry fenced text anywhere? */
+      function recordCarriesFence(record) {
+        if (record.type === 'characterData') {
+          var value = record.target === undefined || record.target === null ? null : record.target.nodeValue
+          return typeof value === 'string' && value.indexOf(Core.EXTRACT_FENCE_START) !== -1
+        }
+        var added = record.addedNodes
+        if (added === undefined || added === null) return false
+        for (var i = 0; i < added.length; i += 1) {
+          var node = added[i]
+          if (node === undefined || node === null) continue
+          var text = node.nodeType === 3 ? node.nodeValue : node.textContent
+          if (typeof text === 'string' && text.indexOf(Core.EXTRACT_FENCE_START) !== -1) return true
+        }
+        return false
+      }
+
+      var observerRoot = typeof document === 'undefined' || document === null
+        ? null
+        : (document.documentElement || document.body || null)
+      if (typeof MutationObserver === 'function' && observerRoot !== null) {
+        extractObserver = new MutationObserver(function (records) {
+          for (var r = 0; r < records.length; r += 1) {
+            if (!recordCarriesFence(records[r])) continue
+            // One pass for the whole batch: a fence can span sibling nodes, so
+            // the mutated node alone is not a sufficient scrub unit.
+            hideExtractFromUi()
+            return
+          }
+        })
+        extractObserver.observe(observerRoot, {
+          childList: true,
+          subtree: true,
+          characterData: true,
+        })
+      }
+      if (observerRoot !== null) {
+        hideExtractFromUi()
+        // Safety net for a surface that renders without a mutation this
+        // observer sees (or a batch whose fence text arrived in pieces).
+        extractPoll = setInterval(function () { hideExtractFromUi() }, 1000)
+        if (typeof extractPoll === 'object' && extractPoll !== null && typeof extractPoll.unref === 'function') {
+          extractPoll.unref()
+        }
+      }
+      ctx.effect(function () {
+        return function () {
+          if (extractObserver !== null) extractObserver.disconnect()
+          if (extractPoll !== null) clearInterval(extractPoll)
+        }
+      }, 'file-attach: extract scrub teardown')
+
       var t = ctx.locale.bind(NS)
       ctx.effect(function () {
         return ctx.locale.register(NS, dictionaries)
@@ -799,46 +872,12 @@ function buildFileAttachPlugin(env) {
         }, AttachDock)
       })
 
-      // ── hide extract fences in conversation UI (model form stays intact) ──
-      function hideExtractFromUi(target) {
-        Core.hideExtractInTree(target === undefined || target === null ? document.body : target)
-      }
-
-      var extractObserver = null
-      var extractPoll = null
-      if (typeof MutationObserver === 'function' && document.body !== undefined && document.body !== null) {
-        extractObserver = new MutationObserver(function (records) {
-          for (var r = 0; r < records.length; r += 1) {
-            var record = records[r]
-            if (record.type === 'characterData') {
-              hideExtractFromUi(record.target)
-              continue
-            }
-            var added = record.addedNodes
-            if (added === undefined || added === null) continue
-            for (var n = 0; n < added.length; n += 1) hideExtractFromUi(added[n])
-          }
-        })
-        extractObserver.observe(document.documentElement || document.body, {
-          childList: true,
-          subtree: true,
-          characterData: true,
-        })
-        hideExtractFromUi(document.body)
-        extractPoll = setInterval(function () { hideExtractFromUi(document.body) }, 1000)
-        if (typeof extractPoll === 'object' && extractPoll !== null && typeof extractPoll.unref === 'function') {
-          extractPoll.unref()
-        }
-      }
-
       // ── teardown ──────────────────────────────────────────────────────────
       ctx.effect(function () {
         return function () {
           document.removeEventListener('dragover', onDragOverCapture, true)
           document.removeEventListener('drop', onDropCapture, true)
           document.removeEventListener('paste', onPasteCapture, true)
-          if (extractObserver !== null) extractObserver.disconnect()
-          if (extractPoll !== null) clearInterval(extractPoll)
           for (var controller of activeUploads) controller.abort()
           activeUploads.clear()
           dockItems = []
