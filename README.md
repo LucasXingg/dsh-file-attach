@@ -46,18 +46,36 @@ but their prompt extract is only a “no text extractor” note.
 - Node.js 22.13 or newer.
 - DSH with the Cordis host and web client plugin system.
 
-Install from GitHub into a DSH profile:
+Install from this GitHub repository into the `web` profile:
 
 ```sh
-dsh plugin --profile <profile-name> add github:LucasXingg/dsh-file-attach
+npx @deepseek-ai/dsh plugin --profile web add --allow-build=tesseract.js github:LucasXingg/dsh-file-attach
 ```
+
+pnpm 10+ blocks dependency build scripts. OCR uses `tesseract.js`, which has one, so the first add without `--allow-build=tesseract.js` fails with `ERR_PNPM_IGNORED_BUILDS`. That is **not** a successful install.
+
+If you already hit that error, allow the script in the profile and re-run:
+
+```sh
+# ~/.dsh/profiles/web/pnpm-workspace.yaml
+allowBuilds:
+  tesseract.js: true
+```
+
+```sh
+npx @deepseek-ai/dsh plugin --profile web add --allow-build=tesseract.js github:LucasXingg/dsh-file-attach
+```
+
+Do **not** run `add dsh-file-attach`. That npm name is a different plugin
+(`dsh-file-attach@1.0.0`) and will not provide drag-and-drop or `/attach`.
 
 Alternatively, download the package from
 [GitHub Releases](https://github.com/LucasXingg/dsh-file-attach/releases)
-or clone this repository, then add that directory:
+or clone this repository, run `npm ci` in the checkout, then add that
+directory:
 
 ```sh
-dsh plugin --profile <profile-name> add /path/to/dsh-file-attach
+npx @deepseek-ai/dsh plugin --profile web add /path/to/dsh-file-attach
 ```
 
 Restart `dsh web` and refresh the browser after installation. The running GUI
