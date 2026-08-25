@@ -41,7 +41,13 @@
 - Node.js 22.13 或更高版本。
 - 带 Cordis 宿主和网页客户端插件系统的 DSH。
 
-从本 GitHub 仓库安装到 `web` profile：
+从 npm 安装到 `web` profile：
+
+```sh
+npx @deepseek-ai/dsh plugin --profile web add --allow-build=tesseract.js @lucasxingg/dsh-file-attach
+```
+
+包尚未发布到 npm 时，改从 GitHub 安装：
 
 ```sh
 npx @deepseek-ai/dsh plugin --profile web add --allow-build=tesseract.js github:LucasXingg/dsh-file-attach
@@ -59,11 +65,7 @@ allowBuilds:
   tesseract.js: true
 ```
 
-```sh
-npx @deepseek-ai/dsh plugin --profile web add --allow-build=tesseract.js github:LucasXingg/dsh-file-attach
-```
-
-不要运行 `add dsh-file-attach`。那个 npm 包名属于另一个插件
+不要运行 `add dsh-file-attach`。那个未加 scope 的 npm 包名属于另一个插件
 （`dsh-file-attach@1.0.0`），不会提供拖放上传或 `/attach`。
 
 也可以从 [GitHub Releases](https://github.com/LucasXingg/dsh-file-attach/releases)
@@ -337,6 +339,16 @@ test/                     node:test 测试
 ```
 
 ## 发布与贡献
+
+npm 包名是 `@lucasxingg/dsh-file-attach`（未加 scope 的 `dsh-file-attach`
+已被占用）。以 npm 用户 `lucasxingg` 登录后发布：
+
+```sh
+npm whoami   # 必须输出 lucasxingg
+npm test
+npm run build:client
+npm publish --access public
+```
 
 项目遵循语义化版本，变更记录见 [CHANGELOG.md](CHANGELOG.md)。推送匹配的 `v*`
 tag 后，工作流会运行测试、检查生成客户端、打包 npm tarball，并创建带自动发布

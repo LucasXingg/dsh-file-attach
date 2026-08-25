@@ -18,5 +18,6 @@ follows [Semantic Versioning](https://semver.org/).
 - Agent tools for notebook output, PDF page OCR, image description, and saving
   original files into the workspace.
 - Automated tests, Node.js 22/24 CI, and tag-driven GitHub Release packaging.
+- npm package name `@lucasxingg/dsh-file-attach` (the unscoped name is taken).
 
 [0.1.0]: https://github.com/LucasXingg/dsh-file-attach/releases/tag/v0.1.0
