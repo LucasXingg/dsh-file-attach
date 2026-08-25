@@ -10,7 +10,6 @@
 </p>
 
 [![CI](https://github.com/LucasXingg/dsh-file-attach/actions/workflows/ci.yml/badge.svg)](https://github.com/LucasXingg/dsh-file-attach/actions/workflows/ci.yml)
-[![GitHub release](https://img.shields.io/github/v/release/LucasXingg/dsh-file-attach)](https://github.com/LucasXingg/dsh-file-attach/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![DSH plugin](https://img.shields.io/badge/topic-dsh--plugin-6f5cff)](https://github.com/topics/dsh-plugin)
 
