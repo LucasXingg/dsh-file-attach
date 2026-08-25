@@ -49,7 +49,21 @@ but their prompt extract is only a “no text extractor” note.
 Install from this GitHub repository into the `web` profile:
 
 ```sh
-npx @deepseek-ai/dsh plugin --profile web add github:LucasXingg/dsh-file-attach
+npx @deepseek-ai/dsh plugin --profile web add --allow-build=tesseract.js github:LucasXingg/dsh-file-attach
+```
+
+pnpm 10+ blocks dependency build scripts. OCR uses `tesseract.js`, which has one, so the first add without `--allow-build=tesseract.js` fails with `ERR_PNPM_IGNORED_BUILDS`. That is **not** a successful install.
+
+If you already hit that error, allow the script in the profile and re-run:
+
+```sh
+# ~/.dsh/profiles/web/pnpm-workspace.yaml
+allowBuilds:
+  tesseract.js: true
+```
+
+```sh
+npx @deepseek-ai/dsh plugin --profile web add --allow-build=tesseract.js github:LucasXingg/dsh-file-attach
 ```
 
 Do **not** run `add dsh-file-attach`. That npm name is a different plugin

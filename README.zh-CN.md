@@ -44,7 +44,23 @@
 从本 GitHub 仓库安装到 `web` profile：
 
 ```sh
-npx @deepseek-ai/dsh plugin --profile web add github:LucasXingg/dsh-file-attach
+npx @deepseek-ai/dsh plugin --profile web add --allow-build=tesseract.js github:LucasXingg/dsh-file-attach
+```
+
+pnpm 10+ 会拦截依赖的构建脚本。OCR 用到的 `tesseract.js` 带有构建脚本，因此不加
+`--allow-build=tesseract.js` 的第一次安装会以 `ERR_PNPM_IGNORED_BUILDS` 失败。
+这**不是**安装成功。
+
+如果已经遇到该错误，在 profile 里允许该脚本后再执行一次：
+
+```sh
+# ~/.dsh/profiles/web/pnpm-workspace.yaml
+allowBuilds:
+  tesseract.js: true
+```
+
+```sh
+npx @deepseek-ai/dsh plugin --profile web add --allow-build=tesseract.js github:LucasXingg/dsh-file-attach
 ```
 
 不要运行 `add dsh-file-attach`。那个 npm 包名属于另一个插件
