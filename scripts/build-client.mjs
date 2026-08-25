@@ -17,6 +17,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'))
 const core = readFileSync(path.join(root, 'src', 'client-core.js'), 'utf8')
 const app = readFileSync(path.join(root, 'src', 'client-app.js'), 'utf8')
 
@@ -25,7 +26,7 @@ const banner = `/**
  * Do not edit by hand; regenerate with \`npm run build:client\`.
  */
 window.__ModuleLoader__.load({
-  id: "dsh-file-attach",
+  id: ${JSON.stringify(pkg.name)},
   factory: (require) => {
     var module = { exports: {} };
     var exports = module.exports;

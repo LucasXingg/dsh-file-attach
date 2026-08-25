@@ -8,7 +8,7 @@
 # Config keys (optional, all with defaults). See lib/index.js Config.
 - insert:
     - id: file-attach
-      name: dsh-file-attach
+      name: '@lucasxingg/dsh-file-attach'
       config:
         maxFileBytes: 52428800
         maxFilesPerMessage: 20

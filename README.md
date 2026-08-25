@@ -46,7 +46,13 @@ but their prompt extract is only a “no text extractor” note.
 - Node.js 22.13 or newer.
 - DSH with the Cordis host and web client plugin system.
 
-Install from this GitHub repository into the `web` profile:
+Install the npm package into the `web` profile:
+
+```sh
+npx @deepseek-ai/dsh plugin --profile web add --allow-build=tesseract.js @lucasxingg/dsh-file-attach
+```
+
+Until the package is on npm, install from GitHub instead:
 
 ```sh
 npx @deepseek-ai/dsh plugin --profile web add --allow-build=tesseract.js github:LucasXingg/dsh-file-attach
@@ -62,11 +68,7 @@ allowBuilds:
   tesseract.js: true
 ```
 
-```sh
-npx @deepseek-ai/dsh plugin --profile web add --allow-build=tesseract.js github:LucasXingg/dsh-file-attach
-```
-
-Do **not** run `add dsh-file-attach`. That npm name is a different plugin
+Do **not** run `add dsh-file-attach`. That unscoped npm name is a different plugin
 (`dsh-file-attach@1.0.0`) and will not provide drag-and-drop or `/attach`.
 
 Alternatively, download the package from
@@ -370,6 +372,17 @@ test/                     node:test suites
 ```
 
 ## Releases and contributing
+
+The npm package name is `@lucasxingg/dsh-file-attach` (the unscoped name
+`dsh-file-attach` is already taken). To publish from a machine logged in as
+the npm user `lucasxingg`:
+
+```sh
+npm whoami   # must print lucasxingg
+npm test
+npm run build:client
+npm publish --access public
+```
 
 Releases follow semantic versioning and are recorded in
 [CHANGELOG.md](CHANGELOG.md). A matching `v*` tag runs tests, verifies the
