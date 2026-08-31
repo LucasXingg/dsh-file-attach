@@ -5,6 +5,14 @@ follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- One-button releases: the release workflow now bumps the version, dates the
+  Unreleased changelog entries, commits and tags, publishes to npm with
+  provenance (trusted publishing, or `NPM_TOKEN` when that secret exists), and
+  publishes the GitHub Release. Pushing a `v*` tag still releases the committed
+  version, and both paths are safe to re-run.
+
 ### Fixed
 
 - Keep extract text out of the rendered conversation when a message holds
