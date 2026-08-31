@@ -5,6 +5,8 @@ follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-31
+
 ### Added
 
 - One-button releases: the release workflow now bumps the version, dates the
@@ -42,5 +44,6 @@ follows [Semantic Versioning](https://semver.org/).
 - Automated tests, Node.js 22/24 CI, and tag-driven GitHub Release packaging.
 - npm package name `@lucasxingg/dsh-file-attach` (the unscoped name is taken).
 
-[Unreleased]: https://github.com/LucasXingg/dsh-file-attach/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/LucasXingg/dsh-file-attach/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/LucasXingg/dsh-file-attach/releases/tag/v0.1.1
 [0.1.0]: https://github.com/LucasXingg/dsh-file-attach/releases/tag/v0.1.0

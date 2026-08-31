@@ -1,6 +1,6 @@
 {
   "name": "@lucasxingg/dsh-file-attach",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Drag-and-drop PDF, Office, images, and text/code files into DSH conversations. The host extracts (and OCRs) them into the prompt; attach_* tools cover notebook cells, PDF-page OCR, image describe, and save.",
   "keywords": [
     "dsh-plugin",
