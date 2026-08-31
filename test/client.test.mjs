@@ -86,6 +86,144 @@ test('Core.displayForm omits the extract fence; stripExtractForDisplay hides it'
   assert.doesNotMatch(stripped, /Chapter 1 secret|extracted content/)
 })
 
+test('Core.stripExtractForDisplay tolerates collapsed and repeated fences', () => {
+  // Two attachments in one message: the composer joins reference forms with a
+  // space, so a fence start is not always preceded by a newline.
+  const two = Core.modelForm({ id: 'a1', name: 'a.jpg', size: 1024, extract: { text: 'secret one' } })
+    + ' '
+    + Core.modelForm({ id: 'b2', name: 'b.jpg', size: 2048, extract: { text: 'secret two' } })
+  const stripped = Core.stripExtractForDisplay(two)
+  assert.equal(stripped, '[attached file "a.jpg" (1.0 KB) id=a1] [attached file "b.jpg" (2.0 KB) id=b2]')
+
+  // A whitespace-collapsing surface (the queue preview) still loses the body.
+  const collapsed = Core.stripExtractForDisplay(
+    '[attached file "a.pdf" id=x] ----- extracted content ----- Chapter 1 secret ----- end ----- ask away',
+  )
+  assert.equal(collapsed, '[attached file "a.pdf" id=x] ask away')
+
+  // A preview truncated mid-fence drops everything after the start marker.
+  const truncated = Core.stripExtractForDisplay('[attached file "a.pdf" id=x] ----- extracted content ----- Chapter…')
+  assert.equal(truncated, '[attached file "a.pdf" id=x]')
+})
+
+// ── DOM stand-in for the fence scrub ────────────────────────────────────────
+
+/** Match a comma-separated selector list of `tag` and `[attr]` terms. */
+function selectorMatches(node, selector) {
+  return String(selector).split(',').some((raw) => {
+    const term = raw.trim()
+    if (term === '') return false
+    if (term.startsWith('[')) return node.attrs[term.slice(1, -1)] !== undefined
+    return node.tag === term
+  })
+}
+
+/** Element stand-in exposing only what Core.hideExtractInTree touches. */
+function el(tag, attrs, ...children) {
+  const node = {
+    nodeType: 1,
+    tag,
+    attrs: { ...attrs },
+    style: {},
+    firstChild: null,
+    nextSibling: null,
+    parentNode: null,
+    parentElement: null,
+    getAttribute: (name) => (node.attrs[name] === undefined ? null : node.attrs[name]),
+    setAttribute: (name, value) => { node.attrs[name] = value },
+    querySelector: (selector) => {
+      const walk = (current) => {
+        for (let child = current.firstChild; child !== null; child = child.nextSibling) {
+          if (child.nodeType !== 1) continue
+          if (selectorMatches(child, selector)) return child
+          const found = walk(child)
+          if (found !== null) return found
+        }
+        return null
+      }
+      return walk(node)
+    },
+    closest: (selector) => {
+      for (let current = node; current !== null; current = current.parentElement) {
+        if (selectorMatches(current, selector)) return current
+      }
+      return null
+    },
+  }
+  Object.defineProperty(node, 'textContent', {
+    get() {
+      let out = ''
+      for (let child = node.firstChild; child !== null; child = child.nextSibling) {
+        out += child.nodeType === 3 ? child.nodeValue : child.textContent
+      }
+      return out
+    },
+  })
+  let previous = null
+  for (const child of children) {
+    child.parentNode = node
+    child.parentElement = node
+    if (previous === null) node.firstChild = child
+    else previous.nextSibling = child
+    previous = child
+  }
+  return node
+}
+
+/** Text-node stand-in. */
+function txt(value) {
+  const node = { nodeType: 3, nodeValue: value, nextSibling: null, parentNode: null, parentElement: null }
+  Object.defineProperty(node, 'textContent', { get: () => node.nodeValue })
+  return node
+}
+
+test('Core.hideExtractInTree hides a fence split across sibling nodes', () => {
+  // The conversation splits a user bubble at every `/name` token, so one fence
+  // can start in one text node, cross a decoration chip, and end in another.
+  const chip = el('span', { 'data-ref-chip': 'skill' }, txt('/9'))
+  const bubble = el(
+    'div',
+    { class: 'bubble' },
+    txt('[attached file "a.jpg" (1.0 KB) id=a1]\n----- extracted content -----\nOCR: 8'),
+    chip,
+    txt(' SECRET ONE\n----- end ----- [attached file "b.jpg" (2.0 KB) id=b2]\n'
+      + '----- extracted content -----\nSECRET TWO\n----- end -----'),
+  )
+  const row = el('div', { 'data-time-hover-root': '' }, bubble, el('div', {}, txt('10:24')))
+
+  assert.equal(Core.hideExtractInTree(row), true)
+  assert.match(row.textContent, /\[attached file "a\.jpg" \(1\.0 KB\) id=a1\]/)
+  assert.match(row.textContent, /\[attached file "b\.jpg" \(2\.0 KB\) id=b2\]/)
+  assert.match(row.textContent, /10:24/)
+  assert.doesNotMatch(row.textContent, /SECRET|OCR|extracted content|----- end -----/)
+  assert.equal(chip.style.display, 'none', 'a chip made of fenced text is collapsed')
+  assert.equal(Core.hideExtractInTree(row), false, 'a second pass finds nothing left to do')
+})
+
+test('Core.hideExtractInTree keeps a truncated fence inside its own text node', () => {
+  const preview = el('span', {}, txt('[attached file "a.pdf" id=x] ----- extracted content ----- SECRET…'))
+  const remove = el('button', {}, txt('Remove'))
+  const later = el('div', {}, txt('[attached file "b.pdf" id=y]\n----- extracted content -----\nSECRET\n----- end -----'))
+  const row = el('li', {}, preview, remove, later)
+
+  assert.equal(Core.hideExtractInTree(row), true)
+  assert.equal(preview.textContent, '[attached file "a.pdf" id=x]')
+  assert.equal(remove.textContent, 'Remove', 'a sibling outside the fence is untouched')
+  assert.equal(remove.style.display, undefined)
+  assert.equal(later.textContent, '[attached file "b.pdf" id=y]', 'a whole fence after a truncated one still goes')
+})
+
+test('Core.hideExtractInTree scrubs messages without touching composer text', () => {
+  const draftText = txt('[attached file "a.pdf" id=x]\n----- extracted content -----\nSECRET\n----- end -----')
+  const composer = el('div', { 'data-composer-card': '' }, el('div', { 'data-input-mirror': '' }, draftText))
+  const message = el('div', {}, txt('[attached file "b.pdf" id=y]\n----- extracted content -----\nSECRET\n----- end -----'))
+  const app = el('div', {}, message, composer)
+
+  assert.equal(Core.hideExtractInTree(app), true)
+  assert.equal(message.textContent, '[attached file "b.pdf" id=y]')
+  assert.match(draftText.nodeValue, /SECRET/, 'the draft mirror stays byte-identical to the draft')
+})
+
 test('Core.hideExtractInTree rewrites text nodes and skips the composer', () => {
   const text = {
     nodeType: 3,
@@ -135,7 +273,7 @@ test('Core.chunkPlan splits byte ranges', () => {
 // ── plugin behavior with stubbed ctx and browser ────────────────────────────
 
 /** Minimal browser/document/fetch stand-ins for apply(). */
-function stubBrowser({ visual = false } = {}) {
+function stubBrowser({ visual = false, body = undefined } = {}) {
   const listeners = new Map()
   const state = {
     prevented: false,
@@ -150,6 +288,8 @@ function stubBrowser({ visual = false } = {}) {
     slots: [],
     visual,
     draftImages: [],
+    disposers: [],
+    observers: [],
   }
   const Event = class Event {
     constructor(type) { this.type = type }
@@ -166,6 +306,18 @@ function stubBrowser({ visual = false } = {}) {
       el.setAttribute = () => {}
       return el
     },
+    body,
+    documentElement: body,
+  }
+  globalThis.MutationObserver = body === undefined ? undefined : class MutationObserver {
+    constructor(callback) {
+      this.callback = callback
+      state.observers.push(this)
+    }
+
+    observe(root, options) { this.observing = { root, options } }
+
+    disconnect() { this.observing = undefined }
   }
   globalThis.fetch = async (url, options = {}) => {
     state.fetches.push({ url, options })
@@ -270,7 +422,9 @@ function stubCtx(browser) {
     },
     effect: (callback) => {
       const disposer = callback()
-      return typeof disposer === 'function' ? disposer : () => {}
+      const dispose = typeof disposer === 'function' ? disposer : () => {}
+      browser.state.disposers.push(dispose)
+      return dispose
     },
   }
   return { ctx, actx, input }
@@ -517,6 +671,29 @@ test('matchEnter claims a plain /attach line and sends the model form as a messa
 
   // Non-attach slash lines are not claimed.
   assert.equal(await source.matchEnter({ sessionId: 's1' }, '/goal build it'), undefined)
+})
+
+test('a rendered message loses its extract fence on the first mutation batch', () => {
+  const bubble = el('div', { class: 'bubble' })
+  const body = el('div', {}, el('div', { class: 'transcript' }, bubble), el('div', { 'data-composer-card': '' }))
+  const browser = stubBrowser({ body })
+  const { ctx } = stubCtx(browser)
+  build({ React: {}, Core }).apply(ctx)
+
+  assert.equal(browser.state.observers.length, 1, 'the scrub observer is installed')
+  assert.equal(browser.state.observers[0].observing.root, body)
+
+  // Render the sent message the way the conversation does, then hand the
+  // observer the batch that inserted it.
+  const model = Core.modelForm({ id: 'a1', name: 'a.jpg', size: 1024, extract: { text: 'SECRET' } })
+  const rendered = el('div', {}, txt(model))
+  bubble.firstChild = rendered
+  rendered.parentNode = bubble
+  rendered.parentElement = bubble
+  browser.state.observers[0].callback([{ type: 'childList', addedNodes: [rendered] }])
+
+  assert.equal(bubble.textContent, '[attached file "a.jpg" (1.0 KB) id=a1]')
+  for (const dispose of browser.state.disposers) dispose()
 })
 
 test('oversized drops are rejected with a toast and no chip', async () => {

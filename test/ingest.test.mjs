@@ -121,6 +121,22 @@ test('displayForm and stripExtractForDisplay hide extract from the UI projection
   assert.doesNotMatch(shown, /Hello PDF|extracted content/)
   const stripped = stripExtractForDisplay('Ask about this\n' + modelForm(meta))
   assert.equal(stripped, 'Ask about this\n[attached file "report.pdf" (2.4 MB) id=ab12cd34]')
+
+  // Two attachments join with a space, and a whitespace-collapsing surface
+  // still has to lose both bodies.
+  const second = modelForm({ id: 'ffffffffffff', name: 'notes.txt', size: 10, extract: { text: 'Secret notes' } })
+  assert.equal(
+    stripExtractForDisplay(modelForm(meta) + ' ' + second),
+    '[attached file "report.pdf" (2.4 MB) id=ab12cd34] [attached file "notes.txt" (10 B) id=ffffffffffff]',
+  )
+  assert.equal(
+    stripExtractForDisplay('[attached file "a.pdf" id=x] ----- extracted content ----- Hello PDF ----- end ----- go'),
+    '[attached file "a.pdf" id=x] go',
+  )
+  assert.equal(
+    stripExtractForDisplay('[attached file "a.pdf" id=x] ----- extracted content ----- Hello P…'),
+    '[attached file "a.pdf" id=x]',
+  )
 })
 
 test('humanSize formats byte counts compactly', () => {

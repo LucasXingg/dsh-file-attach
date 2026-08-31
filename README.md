@@ -165,8 +165,10 @@ For a successful plugin upload, the submitted model text is:
 ```
 
 The browser removes the extract fence from rendered conversation text and
-shows only the attachment header. The underlying submitted message still
-contains the extract. Vault paths are never put into the prompt.
+shows only the attachment header, including when the conversation splits one
+bubble into several nodes or collapses the newlines around the markers. The
+underlying submitted message still contains the extract. Vault paths are never
+put into the prompt.
 
 The 12-character lowercase hexadecimal `id` is the preferred identifier for
 all tools. A filename also works when exactly one upload in the current
