@@ -342,7 +342,29 @@ test/                     node:test 测试
 ## 发布与贡献
 
 npm 包名是 `@lucasxingg/dsh-file-attach`（未加 scope 的 `dsh-file-attach`
-已被占用）。以 npm 用户 `lucasxingg` 登录后发布：
+已被占用）。项目遵循语义化版本，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+
+发布全部由 [`.github/workflows/release.yml`](.github/workflows/release.yml)
+完成。先把改动写进 CHANGELOG 的 `## [Unreleased]`，然后在
+**Actions → Release → Run workflow** 选择版本递增方式运行：工作流会运行测试、
+校验生成的浏览器 bundle、递增版本号、把 Unreleased 条目归入带日期的新版本、
+提交并打 tag、发布到 npm，并带上打包好的 tarball 创建 GitHub Release。也可以
+自己推送 `v*` tag，此时直接发布已提交的版本、跳过递增。两条路径都可以重跑：
+npm 上已存在该版本时会跳过发布，GitHub Release 已存在时只更新附件。Unreleased
+为空会让本次运行失败——没有记录任何改动的发布是失误。
+
+npm 鉴权只需一次性配置，二选一：
+
+- **Trusted publishing**（推荐，仓库里不保存任何凭据）。在 npmjs.com 打开该包
+  → Settings → Trusted publisher → GitHub Actions，仓库填
+  `LucasXingg/dsh-file-attach`，工作流文件名填 `release.yml`，environment 留空。
+  这种方式会自动附带 provenance。所有字段大小写敏感且必须完全一致，npm 只在发布
+  时校验，配置不匹配时发布步骤只会报一个 404。
+- 仓库 secret `NPM_TOKEN`，值为对该包有发布权限的 granular automation token。
+  只有该 secret 存在时工作流才会使用它，并自行传入 `--provenance`。
+
+Run workflow 这条路径会推送发布提交，因此要求 PR 的分支保护会拒绝它；这种情况
+下改用推 tag 发布。仍然可以在以 npm 用户 `lucasxingg` 登录的机器上手动发布：
 
 ```sh
 npm whoami   # 必须输出 lucasxingg
@@ -350,10 +372,6 @@ npm test
 npm run build:client
 npm publish --access public
 ```
-
-项目遵循语义化版本，变更记录见 [CHANGELOG.md](CHANGELOG.md)。推送匹配的 `v*`
-tag 后，工作流会运行测试、检查生成客户端、打包 npm tarball，并创建带自动发布
-说明的 GitHub Release。
 
 开发规范见 [CONTRIBUTING.md](CONTRIBUTING.md)，私下报告安全问题见
 [SECURITY.md](SECURITY.md)，许可条款见 [LICENSE](LICENSE)。

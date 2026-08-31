@@ -375,8 +375,36 @@ test/                     node:test suites
 ## Releases and contributing
 
 The npm package name is `@lucasxingg/dsh-file-attach` (the unscoped name
-`dsh-file-attach` is already taken). To publish from a machine logged in as
-the npm user `lucasxingg`:
+`dsh-file-attach` is already taken). Releases follow semantic versioning and
+are recorded in [CHANGELOG.md](CHANGELOG.md).
+
+[`.github/workflows/release.yml`](.github/workflows/release.yml) does the whole
+release. Record what changed under `## [Unreleased]` in the changelog, then run
+**Actions → Release → Run workflow** and pick a bump. It runs the tests,
+verifies the generated client bundle, bumps the version, dates the Unreleased
+entries under the new version, commits and tags the release branch, publishes
+to npm, and publishes the GitHub Release with the packed tarball. Pushing a
+`v*` tag yourself releases the already-committed version instead and skips the
+bump. Either path is safe to re-run: the npm publish is skipped when that
+version is already on the registry, and the GitHub Release is updated rather
+than recreated. An empty Unreleased section fails the run — a release with no
+recorded changes is a mistake.
+
+npm authentication is a one-time setup, either of:
+
+- **Trusted publishing** (recommended; nothing is stored in the repository). On
+  npmjs.com open the package → Settings → Trusted publisher → GitHub Actions,
+  with repository `LucasXingg/dsh-file-attach` and workflow filename
+  `release.yml`, leaving the environment blank. Provenance is then attached
+  automatically. Every field is exact and case-sensitive, and npm only checks
+  at publish time, so a mismatch surfaces as a bare 404 in the publish step.
+- An `NPM_TOKEN` repository secret holding a granular automation token with
+  publish rights on the package. The workflow uses it only when it is present,
+  and passes `--provenance` itself.
+
+The run-workflow path pushes the release commit, so branch protection that
+requires pull requests will reject it; release by tag in that case. Publishing
+by hand still works from a machine logged in as the npm user `lucasxingg`:
 
 ```sh
 npm whoami   # must print lucasxingg
@@ -384,11 +412,6 @@ npm test
 npm run build:client
 npm publish --access public
 ```
-
-Releases follow semantic versioning and are recorded in
-[CHANGELOG.md](CHANGELOG.md). A matching `v*` tag runs tests, verifies the
-generated client, packs the npm tarball, and publishes a GitHub Release with
-generated notes.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidance,
 [SECURITY.md](SECURITY.md) for private vulnerability reporting, and

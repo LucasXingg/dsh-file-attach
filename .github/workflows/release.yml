@@ -1,26 +1,69 @@
 name: Release
 
+# Two ways in, one path out:
+#
+#  - Actions → Release → Run workflow: bumps the version, rolls the changelog,
+#    commits, tags, then releases. This is the one-button release.
+#  - Pushing a `v*` tag yourself: releases the version already committed.
+#
+# Both paths run the tests, publish to npm, and publish the GitHub Release.
+# Every publishing step is idempotent, so a failed run is safe to re-run: the
+# npm publish is skipped when that version is already on the registry, and the
+# GitHub Release is updated rather than recreated.
+#
+# npm authentication, one of (checked in this order):
+#
+#  1. Trusted publishing (recommended, no stored credential). On npmjs.com:
+#     package → Settings → Trusted publisher → GitHub Actions, with repository
+#     `LucasXingg/dsh-file-attach` and workflow filename `release.yml`. Leave
+#     the environment blank unless this job declares one. Every field is exact
+#     and case-sensitive; a mismatch surfaces as a bare 404 at publish time.
+#     Provenance is attached automatically.
+#  2. An `NPM_TOKEN` repository secret holding a granular automation token with
+#     publish rights. Used only when the secret is present.
+
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump to apply before releasing
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+          - none
 
 permissions:
-  contents: write
+  contents: write # push the release commit and tag; publish the GitHub Release
+  id-token: write # mint the OIDC token npm trusted publishing exchanges
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    name: Release
+    runs-on: ubuntu-latest # trusted publishing rejects self-hosted runners
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
+        # No registry-url and no dependency cache: trusted publishing wants a
+        # clean auth surface (an .npmrc auth line suppresses the OIDC path), and
+        # a release should resolve from the lockfile alone.
         uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: npm
 
       - name: Install dependencies
         run: npm ci
@@ -33,16 +76,123 @@ jobs:
           npm run build:client
           git diff --exit-code -- lib/client.js
 
-      - name: Verify tag matches package version
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
+      - name: Bump version, roll changelog, and tag
+        if: github.event_name == 'workflow_dispatch'
         run: |
-          node -e "const expected = 'v' + require('./package.json').version; if (process.env.RELEASE_TAG !== expected) { throw new Error(\`Tag \${process.env.RELEASE_TAG} does not match \${expected}\`) }"
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ "${{ inputs.bump }}" != "none" ]; then
+            npm version "${{ inputs.bump }}" --no-git-tag-version
+            node scripts/roll-changelog.mjs
+          fi
+          version="$(node -p "require('./package.json').version")"
+          tag="v${version}"
+          if ! git diff --quiet -- package.json package-lock.json CHANGELOG.md; then
+            git add package.json package-lock.json CHANGELOG.md
+            git commit -m "Release ${tag}"
+            git push origin "HEAD:${{ github.ref_name }}"
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+            echo "${tag} already exists on origin"
+          else
+            git tag "${tag}"
+            git push origin "${tag}"
+          fi
+
+      - name: Resolve release identity
+        id: release
+        run: |
+          set -euo pipefail
+          name="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          tag="v${version}"
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref_name }}" != "${tag}" ]; then
+            echo "::error::tag ${{ github.ref_name }} does not match package version ${version}"
+            exit 1
+          fi
+          {
+            echo "name=${name}"
+            echo "version=${version}"
+            echo "tag=${tag}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Decide what is left to do
+        id: plan
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          spec="${{ steps.release.outputs.name }}@${{ steps.release.outputs.version }}"
+          if npm view "${spec}" version >/dev/null 2>&1; then
+            echo "npm already has ${spec}"
+            echo "publish=skip" >> "$GITHUB_OUTPUT"
+          elif [ -n "${NPM_TOKEN}" ]; then
+            echo "publish=token" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=oidc" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Require an npm that speaks trusted publishing
+        if: steps.plan.outputs.publish == 'oidc'
+        run: |
+          set -euo pipefail
+          floor=11.5.1
+          have="$(npm --version)"
+          if [ "$(printf '%s\n%s\n' "${floor}" "${have}" | sort -V | head -n1)" != "${floor}" ]; then
+            echo "npm ${have} predates trusted publishing (needs >= ${floor}); upgrading"
+            npm install -g npm@latest
+          fi
+          npm --version
+
+      - name: Publish to npm via trusted publishing
+        if: steps.plan.outputs.publish == 'oidc'
+        run: npm publish --access public
+
+      - name: Publish to npm with NPM_TOKEN
+        if: steps.plan.outputs.publish == 'token'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo '//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}' > .npmrc
+          npm publish --access public --provenance
+          rm -f .npmrc
 
       - name: Build release tarball
-        run: npm pack
+        id: pack
+        run: |
+          set -euo pipefail
+          tarball="$(npm pack | tail -n1)"
+          echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" lucasxingg-dsh-file-attach-*.tgz --verify-tag --generate-notes --title "${{ github.ref_name }}"
+          TAG: ${{ steps.release.outputs.tag }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: |
+          set -euo pipefail
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" "${TARBALL}" --clobber
+          else
+            gh release create "${TAG}" "${TARBALL}" --verify-tag --generate-notes --title "${TAG}"
+          fi
+
+      - name: Summarize
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          SPEC: ${{ steps.release.outputs.name }}@${{ steps.release.outputs.version }}
+          PLAN: ${{ steps.plan.outputs.publish }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### ${TAG}"
+            echo
+            case "${PLAN}" in
+              skip) echo "- npm: \`${SPEC}\` was already published, left untouched" ;;
+              oidc) echo "- npm: published \`${SPEC}\` via trusted publishing" ;;
+              token) echo "- npm: published \`${SPEC}\` with NPM_TOKEN and provenance" ;;
+            esac
+            echo "- GitHub Release: ${TAG}"
+          } >> "$GITHUB_STEP_SUMMARY"
