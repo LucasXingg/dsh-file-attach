@@ -100,16 +100,23 @@ var FileAttachCore = (function () {
   }
 
   /**
+   * Hidden appendix block for one file. Header lives inside the fence so the
+   * conversation UI can hide the whole section.
+   */
+  function extractSection(meta) {
+    var extractText = meta && meta.extract && typeof meta.extract.text === 'string' ? meta.extract.text : undefined
+    if (extractText === undefined || !meta || meta.name === undefined) return ''
+    return EXTRACT_FENCE_START + '\n' + attachHeader(meta) + '\n' + extractText + '\n' + EXTRACT_FENCE_END
+  }
+
+  /**
    * The model-visible form of one attachment: extracted text when present,
    * otherwise a degraded id hint. Vault paths are never included.
    */
   function modelForm(meta) {
     var header = attachHeader(meta)
-    var extractText = meta && meta.extract && typeof meta.extract.text === 'string' ? meta.extract.text : undefined
-    if (extractText !== undefined && meta && meta.name !== undefined) {
-      return header + '\n' + EXTRACT_FENCE_START + '\n' + extractText + '\n' + EXTRACT_FENCE_END
-    }
-    return header
+    var section = extractSection(meta)
+    return section === '' ? header : header + '\n' + section
   }
 
   /**
@@ -352,6 +359,54 @@ var FileAttachCore = (function () {
     return m === null ? null : m[1]
   }
 
+  /** Clipboard-projection length of one occurrence; each chip is 1 detect-projection character. */
+  function occurrenceLength(occurrence) {
+    if (occurrence == null) return 1
+    if (typeof occurrence.length === 'number' && occurrence.length > 0) return occurrence.length
+    if (typeof occurrence.clipboardText === 'string' && occurrence.clipboardText.length > 0) {
+      return occurrence.clipboardText.length
+    }
+    return 1
+  }
+
+  /**
+   * Detect-projection spans for every chip matching source+ref.
+   * Occurrence offset/length are clipboard-text coordinates; slash/input-insert-*
+   * spans address the detect projection, where each chip occupies one character.
+   * Spans are reverse-sorted so sequential deletions stay valid. A trailing space
+   * after the chip is consumed when present in the clipboard draft.
+   */
+  function detectSpansForRef(occurrences, source, ref, draft) {
+    var expansion = 0
+    var ranges = []
+    var list = occurrences == null ? [] : occurrences
+    for (var i = 0; i < list.length; i += 1) {
+      var occ = list[i]
+      var length = occurrenceLength(occ)
+      var offset = typeof occ.offset === 'number' ? occ.offset : 0
+      var start = offset - expansion
+      if (occ.source === source && occ.ref === ref) {
+        var end = start + 1
+        var clipboardEnd = offset + length
+        if (typeof draft === 'string' && draft.charAt(clipboardEnd) === ' ') end += 1
+        ranges.push({ start: start, end: end })
+      }
+      expansion += length - 1
+    }
+    ranges.sort(function (a, b) { return b.start - a.start })
+    return ranges
+  }
+
+  /** Map of refs currently present in the composer for one trigger source. */
+  function occurrenceRefs(occurrences, source) {
+    var refs = {}
+    var list = occurrences == null ? [] : occurrences
+    for (var i = 0; i < list.length; i += 1) {
+      if (list[i].source === source && list[i].ref !== undefined) refs[list[i].ref] = true
+    }
+    return refs
+  }
+
   /** Chunk plan for one file: zero-based [start, end) byte ranges of at most chunkBytes. */
   function chunkPlan(size, chunkBytes) {
     var plan = []
@@ -370,6 +425,7 @@ var FileAttachCore = (function () {
     modelSupportsVisual: modelSupportsVisual,
     humanSize: humanSize,
     displayForm: displayForm,
+    extractSection: extractSection,
     modelForm: modelForm,
     stripExtractForDisplay: stripExtractForDisplay,
     hideExtractInTree: hideExtractInTree,
@@ -378,6 +434,9 @@ var FileAttachCore = (function () {
     EXTRACT_FENCE_END: EXTRACT_FENCE_END,
     endOfDraftSpan: endOfDraftSpan,
     parseAttachLine: parseAttachLine,
+    occurrenceLength: occurrenceLength,
+    detectSpansForRef: detectSpansForRef,
+    occurrenceRefs: occurrenceRefs,
     chunkPlan: chunkPlan,
   }
 })()

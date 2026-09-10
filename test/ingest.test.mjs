@@ -14,6 +14,9 @@ import {
   vaultUploadDir,
   modelForm,
   displayForm,
+  extractSection,
+  attachIdsInText,
+  appendExtractsBehindPrompt,
   stripExtractForDisplay,
   humanSize,
   chunkPlan,
@@ -137,6 +140,32 @@ test('displayForm and stripExtractForDisplay hide extract from the UI projection
     stripExtractForDisplay('[attached file "a.pdf" id=x] ----- extracted content ----- Hello P…'),
     '[attached file "a.pdf" id=x]',
   )
+})
+
+test('appendExtractsBehindPrompt puts every extract after the user prompt', () => {
+  const a = {
+    id: 'aaaaaaaaaaaa',
+    name: 'a.pdf',
+    size: 10,
+    extract: { kind: 'pdf', text: 'AAA', truncated: false, notes: [] },
+  }
+  const b = {
+    id: 'bbbbbbbbbbbb',
+    name: 'b.txt',
+    size: 4,
+    extract: { kind: 'text', text: 'BBB', truncated: false, notes: [] },
+  }
+  const prompt = `Please compare ${displayForm(a)} with ${displayForm(b)} thanks`
+  const behind = appendExtractsBehindPrompt(prompt, [b, a])
+  assert.equal(behind.indexOf('Please compare'), 0)
+  assert.ok(behind.indexOf('thanks') < behind.indexOf('----- extracted content -----'))
+  assert.ok(behind.indexOf('AAA') < behind.indexOf('BBB'), 'appendix follows first-reference order')
+  assert.match(extractSection(a), /AAA/)
+  assert.doesNotMatch(stripExtractForDisplay(behind), /AAA|BBB|extracted content/)
+  assert.deepEqual(attachIdsInText(prompt), ['aaaaaaaaaaaa', 'bbbbbbbbbbbb'])
+  const moved = appendExtractsBehindPrompt(modelForm(a) + '\nplease', [a])
+  assert.match(moved, /^\[attached file "a\.pdf"/)
+  assert.match(moved, /please\n----- extracted content -----/)
 })
 
 test('humanSize formats byte counts compactly', () => {

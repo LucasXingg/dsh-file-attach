@@ -29,7 +29,8 @@ but their prompt extract is only a “no text extractor” note.
   **Attach files…** entry in DSH's `/` menu.
 - English and Chinese labels, status text, and upload error notifications.
 - 1 MiB sequential chunk uploads with aggregate progress and extraction status.
-- A composer-aligned dock showing plugin-uploaded files and their sizes.
+- A composer-aligned dock showing plugin-uploaded files, their sizes, and a
+  remove control that follows the blue filename in the composer.
 - Extractors for text/code, PDF, DOCX, XLSX, PPTX, Jupyter notebooks, and
   raster images.
 - Model-aware routing between DSH native vision and plugin OCR/extraction.
@@ -104,9 +105,18 @@ Files routed to the plugin from one batch start independently; the client does
 not queue them or pre-check `maxConcurrentUploads`. The dock combines all
 in-flight files into one aggregate progress bar. On each file's final request,
 the label switches to extraction while progress is held at an approximate 95%.
-After extraction, the reference chip is inserted at the end of the draft with
-up to two revision-guarded attempts. If insertion fails, the client shows an
-error, but the completed file remains in the vault and ready dock.
+After extraction, the filename is inserted at the end of the draft as a blue
+composer token (the same filename you can delete with Backspace), with up to
+two revision-guarded attempts. If insertion fails, the client shows an error;
+the completed file remains in the vault, and the dock keeps a dismissible row
+with no blue filename in the composer.
+
+Each ready file in the dock has an **×**. That removes the matching blue
+filename from the composer. The original stays in the vault. The list above
+the composer is the files that will be extracted behind this prompt: Backspace
+on that filename, or sending the message (which clears the draft), hides the
+file above the composer. In-flight uploads stay visible until they finish or
+fail.
 
 ### Image routing
 
@@ -155,34 +165,45 @@ timeouts, and failures leave OCR intact and add no fatal upload error.
 
 ## What the model and user see
 
-For a successful plugin upload, the submitted model text is:
+The blue filename in the composer is a short reference. It can sit anywhere
+in the prompt. Extracts are not expanded there. At send time the host
+appends every extract for those files **behind the user prompt**:
 
 ```text
-[attached file "report.pdf" (2.4 MB) id=a1b2c3d4e5f6]
+Please compare [attached file "a.pdf" (2.4 MB) id=a1b2c3d4e5f6] with [attached file "b.txt" (10 B) id=b2c3d4e5f6a1] thanks
 ----- extracted content -----
-…extracted text…
+[attached file "a.pdf" (2.4 MB) id=a1b2c3d4e5f6]
+…extracted text from a.pdf…
+----- end -----
+----- extracted content -----
+[attached file "b.txt" (10 B) id=b2c3d4e5f6a1]
+…extracted text from b.txt…
 ----- end -----
 ```
 
-The browser removes the extract fence from rendered conversation text and
-shows only the attachment header, including when the conversation splits one
-bubble into several nodes or collapses the newlines around the markers. The
-underlying submitted message still contains the extract. Vault paths are never
-put into the prompt.
+The file list above the composer is those same files: everything that will
+be extracted into that end section. The browser removes the extract fences
+from rendered conversation text, including when the conversation splits one
+bubble into several nodes or collapses the newlines around the markers, so
+the user only sees the prompt and the blue filenames. The underlying
+submitted message still contains the extract. Vault paths are never put into
+the prompt.
 
 The 12-character lowercase hexadecimal `id` is the preferred identifier for
 all tools. A filename also works when exactly one upload in the current
 session's vault has that basename; duplicate names require the ID.
 
 Attachment metadata is held in browser memory. After a page reload, a restored
-reference does not recover the original filename and size, so it degrades to:
+filename in the composer may not recover the original name and size, so it
+degrades to:
 
 ```text
 [attached file id=a1b2c3d4e5f6 — extraction unavailable after reload; use attach_* tools with id a1b2c3d4e5f6]
 ```
 
-The original and `extract.json` still exist in the vault, and the tools can
-resolve the original by ID.
+The original and `extract.json` still exist in the vault. The host still
+appends the extract behind the prompt from that vault copy, and the tools
+can resolve the original by ID.
 
 ## Model-facing tools
 
@@ -307,9 +328,10 @@ IDs are reduced to one safe path segment.
 
 Aborted and failed partial uploads are removed best-effort. Abandoned partial
 uploads expire after 10 minutes and are swept once per minute. Completed
-uploads are not garbage-collected: removing a composer reference does not
-delete the original, and ready dock entries have no removal control. Plugin
-teardown aborts active browser uploads and cleans open host upload sessions.
+uploads are not garbage-collected: removing the blue filename from the
+composer or dismissing a dock row does not delete the original. Plugin
+teardown aborts active browser
+uploads and cleans open host upload sessions.
 
 The routes are same-origin and live-session checks protect upload, extract, and
 vision operations, but there is no separate bearer credential. The abort and
@@ -321,8 +343,6 @@ an authenticated reverse proxy protects it. See [SECURITY.md](SECURITY.md).
 - Browser attachment metadata and dock state are not persisted across reloads.
 - Reloaded `/attach <id>` references degrade to an ID hint instead of
   rehydrating the full extract into the prompt.
-- Ready dock entries have no remove control and are not synchronized with
-  removal of composer reference chips.
 - `maxFilesPerMessage` is exposed but not enforced by the current client.
 - Completed vault files have no automatic retention or garbage-collection
   policy.
@@ -334,8 +354,8 @@ an authenticated reverse proxy protects it. See [SECURITY.md](SECURITY.md).
 - The page-wide drop listener claims any file drop for the active session.
 - Without an active session, a drop is consumed and discarded with only a
   console warning; the localized `noSession` toast is not currently used.
-- Reference chips are appended at the draft end rather than inserted at the
-  caret.
+- The blue filename in the composer is appended at the draft end rather than
+  inserted at the caret.
 - Legacy Office formats (`.doc`, `.xls`, `.ppt`) have no extractor.
 - SVG, BMP, TIFF, and other non-PNG/JPEG/WebP/GIF images do not use OCR or
   native vision; they follow text detection or unsupported-binary handling.
