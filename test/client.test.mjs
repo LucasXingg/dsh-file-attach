@@ -123,6 +123,42 @@ test('Core.parseAttachLine only matches a leading /attach token', () => {
   assert.equal(Core.parseAttachLine('x /attach ab12cd34'), null)
 })
 
+test('Core.detectSpansForRef maps clipboard occurrences onto detect spans', () => {
+  const chip = '/attach ab12cd34'
+  assert.deepEqual(
+    Core.detectSpansForRef(
+      [{ source: 'attach', ref: 'ab12cd34', offset: 5, length: chip.length, clipboardText: chip }],
+      'attach',
+      'ab12cd34',
+      'hello' + chip,
+    ),
+    [{ start: 5, end: 6 }],
+  )
+  assert.deepEqual(
+    Core.detectSpansForRef(
+      [{ source: 'attach', ref: 'ab12cd34', offset: 0, length: chip.length, clipboardText: chip }],
+      'attach',
+      'ab12cd34',
+      chip + ' more',
+    ),
+    [{ start: 0, end: 2 }],
+  )
+  const later = Core.detectSpansForRef(
+    [
+      { source: 'attach', ref: 'aa', offset: 0, length: 10, clipboardText: '/attach aa' },
+      { source: 'attach', ref: 'bb', offset: 11, length: 10, clipboardText: '/attach bb' },
+    ],
+    'attach',
+    'bb',
+    '/attach aa /attach bb',
+  )
+  assert.deepEqual(later, [{ start: 2, end: 3 }])
+  assert.deepEqual(Core.occurrenceRefs(
+    [{ source: 'attach', ref: 'aa' }, { source: 'other', ref: 'bb' }],
+    'attach',
+  ), { aa: true })
+})
+
 test('Core.chunkPlan splits byte ranges', () => {
   assert.equal(Core.chunkPlan(0, 10).length, 0)
   assert.deepEqual(Core.chunkPlan(2500, 1000), [
@@ -279,7 +315,7 @@ function fileLike(name, type, size) {
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
 
-test('apply registers the attach source; codec serializes the rich model form', async () => {
+test('apply registers the attach source; codec serializes a short filename reference', async () => {
   const browser = stubBrowser()
   const { ctx } = stubCtx(browser)
   const plugin = build({ React: {}, Core })
@@ -316,7 +352,8 @@ test('apply registers the attach source; codec serializes the rich model form', 
 
   const form = await source.codec.serialize('ab12cd34')
   assert.match(form, /a\.pdf/)
-  assert.match(form, /extracted:a\.pdf/)
+  assert.match(form, /id=ab12cd34/)
+  assert.doesNotMatch(form, /extracted:a\.pdf|extracted content/)
   assert.doesNotMatch(form, /pypdf|attachments\/|file-attach/)
   assert.equal(browser.state.notifies.filter((n) => n.level === 'info').length, 0)
 })
@@ -364,6 +401,112 @@ test('registers the attach strip into conversation.input.dock at composer width'
   assert.equal(root.props.style.width, '100%')
   assert.equal(root.props.style.marginLeft, 'auto')
   assert.equal(root.props.style.marginRight, 'auto')
+})
+
+function occurrenceFor(name = 'a.pdf', ref = 'ab12cd34') {
+  const clipboardText = '/attach ' + ref
+  return {
+    source: 'attach',
+    ref,
+    offset: 5,
+    length: clipboardText.length,
+    clipboardText,
+    label: name,
+  }
+}
+
+test('dock chips can be removed, which deletes the composer reference', async () => {
+  const created = []
+  const React = {
+    useState: (value) => [value, () => {}],
+    useEffect: (fn) => {
+      fn()
+      return undefined
+    },
+    createElement: (type, props, ...children) => {
+      created.push({ type, props: props || {}, children })
+      return { type, props: props || {}, children }
+    },
+  }
+  const browser = stubBrowser()
+  const { ctx, input } = stubCtx(browser)
+  const chip = '/attach ab12cd34'
+  input.state = {
+    getSnapshot: () => ({
+      draft: 'hello' + chip,
+      draftRev: 4,
+      phase: 'plain',
+      occurrences: [occurrenceFor()],
+    }),
+  }
+  build({ React, Core }).apply(ctx)
+  browser.listeners.get('drop')({
+    dataTransfer: { types: ['Files'], files: [fileLike('a.pdf', 'application/pdf', 5)] },
+    preventDefault: () => { browser.state.prevented = true },
+    stopPropagation: () => { browser.state.stopped = true },
+  })
+  await tick()
+  await tick()
+  await tick()
+
+  created.length = 0
+  const Dock = browser.state.slots[0].component
+  const live = input.state.getSnapshot()
+  Dock({ sessionId: 's1', attach: () => {}, input: live })
+  const remove = created.find((node) => (
+    node.type === 'button' && String(node.props['aria-label'] || '').includes('removeAria')
+  ))
+  assert.ok(remove, 'remove control rendered')
+  remove.props.onClick({ stopPropagation() {} })
+
+  const deleted = browser.state.bailCalls.filter((call) => call.name === 'slash/input-insert-text')
+  assert.equal(deleted.length, 1)
+  assert.equal(deleted[0].payload.text, '')
+  assert.deepEqual(deleted[0].payload.span, { start: 5, end: 6, draftRev: 4 })
+
+  created.length = 0
+  const after = Dock({ sessionId: 's1', attach: () => {}, input: { occurrences: [] } })
+  assert.equal(after, null, 'dock hides the file after it is removed')
+})
+
+test('ready dock files disappear after submit clears composer occurrences', async () => {
+  const created = []
+  const React = {
+    useState: (value) => [value, () => {}],
+    useEffect: (fn) => {
+      fn()
+      return undefined
+    },
+    createElement: (type, props, ...children) => {
+      created.push({ type, props: props || {}, children })
+      return { type, props: props || {}, children }
+    },
+  }
+  const browser = stubBrowser()
+  const { ctx } = stubCtx(browser)
+  build({ React, Core }).apply(ctx)
+  browser.listeners.get('drop')({
+    dataTransfer: { types: ['Files'], files: [fileLike('a.pdf', 'application/pdf', 5)] },
+    preventDefault: () => { browser.state.prevented = true },
+    stopPropagation: () => { browser.state.stopped = true },
+  })
+  await tick()
+  await tick()
+  await tick()
+
+  const Dock = browser.state.slots[0].component
+  created.length = 0
+  const whileDraft = Dock({
+    sessionId: 's1',
+    attach: () => {},
+    input: { occurrences: [occurrenceFor()] },
+  })
+  assert.ok(whileDraft, 'dock shows the file while the composer still has it')
+  assert.ok(created.some((node) => node.children && node.children.includes('a.pdf')))
+
+  created.length = 0
+  const afterSend = Dock({ sessionId: 's1', attach: () => {}, input: { occurrences: [] } })
+  assert.equal(afterSend, null, 'dock does not persist after the message is sent')
 })
 
 test('image-only drops are claimed by this plugin when the model is not visual', async () => {
@@ -489,7 +632,7 @@ test('mixed drops attach every file including images', async () => {
   assert.deepEqual(labels, ['notes.pdf', 'photo.png'])
 })
 
-test('matchEnter claims a plain /attach line and sends the model form as a message', async () => {
+test('matchEnter claims a plain /attach line and sends the filename reference', async () => {
   const browser = stubBrowser()
   const { ctx } = stubCtx(browser)
   const plugin = build({ React: {}, Core })
@@ -503,6 +646,7 @@ test('matchEnter claims a plain /attach line and sends the model form as a messa
   assert.equal(browser.state.prompts.length, 1)
   assert.equal(browser.state.prompts[0].mode, 'queue')
   assert.match(browser.state.prompts[0].content[0].text, /id=ab12cd34/)
+  assert.doesNotMatch(browser.state.prompts[0].content[0].text, /extracted content/)
   assert.doesNotMatch(browser.state.prompts[0].content[0].text, /attachments\//)
 
   // Non-attach slash lines are not claimed.

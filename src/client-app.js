@@ -11,12 +11,14 @@
  *     composer vision path when the current model declares `image` input;
  *     otherwise they (and every non-image file) use this plugin's extract path.
  *  2. Chunked binary upload to the host half (POST /api/dsh-file-attach/upload).
- *  3. On success, inserts a reference chip into the composer draft through the
- *     scoped `slash/input-insert-reference` event. The host extract is spliced
- *     into the model form at serialize time. The conversation UI strips the
- *     extract fence and shows only the `[attached file …]` header.
+ *  3. On success, inserts a blue filename into the composer draft through the
+ *     scoped `slash/input-insert-reference` event. That filename is a short
+ *     model reference. The host appends every extract behind the user prompt
+ *     at send time. The conversation UI hides that appendix.
  *  4. A `conversation.input.dock` strip aligned to the composer card width:
- *     upload progress + the session's attached files + an Add picker.
+ *     upload progress + the files that will be extracted behind this prompt
+ *     (with remove) + an Add picker. Ready files follow the composer: they
+ *     disappear when the filename is deleted or after the message is sent.
  *  5. A `/attach` input-trigger source whose `matchEnter` recovers a plain-text
  *     `/attach <id>` line after a page reload.
  */
@@ -29,7 +31,6 @@ function buildFileAttachPlugin(env) {
   var ROUTE_UPLOAD = '/api/dsh-file-attach/upload'
   var ROUTE_ABORT = '/api/dsh-file-attach/abort'
   var ROUTE_CONFIG = '/api/dsh-file-attach/config'
-  var ROUTE_EXTRACT = '/api/dsh-file-attach/extract'
   var ROUTE_VISION = '/api/dsh-file-attach/vision'
   var DEFAULT_LIMITS = {
     maxFileBytes: 50 * 1024 * 1024,
@@ -50,6 +51,10 @@ function buildFileAttachPlugin(env) {
       noSession: '没有可附加文件的会话',
       busy: '正在处理中，请稍后再附加文件',
       insertFailed: '无法插入 {name} 的引用',
+      remove: '移除',
+      removeAria: '移除 {name}',
+      removeTitle: '从本次消息中移除',
+      removeFailed: '无法从草稿中移除 {name}',
     },
     en: {
       attach: 'Attach files',
@@ -62,6 +67,10 @@ function buildFileAttachPlugin(env) {
       noSession: 'No active session to attach files to',
       busy: 'The conversation is busy; attach files in a moment',
       insertFailed: 'Could not insert the reference for {name}',
+      remove: 'Remove',
+      removeAria: 'Remove {name}',
+      removeTitle: 'Remove from this message',
+      removeFailed: 'Could not remove {name} from the draft',
     },
   }
 
@@ -110,6 +119,34 @@ function buildFileAttachPlugin(env) {
 
       function dockForSession(sessionId) {
         return dockItems.filter(function (item) { return item.sessionId === sessionId })
+      }
+
+      /** Drop ready rows that are no longer in the composer (removed chip or sent message). */
+      function dockPruneReadyNotIn(sessionId, keepRefs) {
+        var next = dockItems.filter(function (item) {
+          if (item.sessionId !== sessionId || item.phase !== 'ready') return true
+          if (item.inserted === false) return true
+          if (item.id === undefined) return true
+          return keepRefs[item.id] === true
+        })
+        if (next.length === dockItems.length) return
+        dockItems = next
+        dockPing()
+      }
+
+      function liveInputOf(props) {
+        if (typeof props.useInput === 'function') return props.useInput(function (value) { return value })
+        return props.input
+      }
+
+      function readyStillInComposer(ready, input) {
+        if (input == null || input.occurrences === undefined) return ready
+        var refs = Core.occurrenceRefs(input.occurrences, SOURCE_NAME)
+        return ready.filter(function (item) {
+          if (item.inserted === false) return true
+          if (item.id === undefined) return true
+          return refs[item.id] === true
+        })
       }
 
       // ── host config mirror ──────────────────────────────────────────────
@@ -395,6 +432,7 @@ function buildFileAttachPlugin(env) {
         })
           .then(function (meta) {
             activeUploads.delete(controller)
+            var inserted = insertChip(sessionId, meta)
             dockUpsert({
               key: key,
               sessionId: sessionId,
@@ -404,8 +442,8 @@ function buildFileAttachPlugin(env) {
               phase: 'ready',
               received: meta.size,
               total: meta.size,
+              inserted: inserted,
             })
-            insertChip(sessionId, meta)
           })
           .catch(function (error) {
             activeUploads.delete(controller)
@@ -418,7 +456,7 @@ function buildFileAttachPlugin(env) {
           })
       }
 
-      // ── chip insertion ───────────────────────────────────────────────────
+      // ── composer filename (short model reference) ──────────────────────
       function insertChip(sessionId, meta) {
         var face = sessionFace(sessionId)
         if (face === undefined) return false
@@ -427,6 +465,7 @@ function buildFileAttachPlugin(env) {
           source: SOURCE_NAME,
           ref: meta.id,
           label: meta.name,
+          appearance: 'file',
           clipboardText: '/attach ' + meta.id,
         }
         for (var attempt = 0; attempt < 2; attempt += 1) {
@@ -439,41 +478,46 @@ function buildFileAttachPlugin(env) {
         return false
       }
 
-      // ── model form ───────────────────────────────────────────────────────
-      function modelFormOf(ref) {
-        var meta = metaByRef.get(ref)
-        return Core.modelForm(meta === undefined ? { id: ref } : meta)
+      /**
+       * Delete this attach chip from the composer. Occurrence offsets are
+       * clipboard-text; slash/input-insert-text spans are detect-projection.
+       */
+      function removeComposerRef(sessionId, ref, inputState) {
+        var face = sessionFace(sessionId)
+        if (face === undefined) return false
+        var snapshot = face.input.state.getSnapshot()
+        var occurrences = (inputState && inputState.occurrences) || snapshot.occurrences
+        var spans = Core.detectSpansForRef(occurrences, SOURCE_NAME, ref, snapshot.draft)
+        if (spans.length === 0) return true
+        for (var i = 0; i < spans.length; i += 1) {
+          var live = face.input.state.getSnapshot()
+          var applied = face.actx.bail(face.actx, 'slash/input-insert-text', {
+            text: '',
+            span: { start: spans[i].start, end: spans[i].end, draftRev: live.draftRev },
+          })
+          if (applied !== true) return false
+        }
+        return true
       }
 
-      function fetchExtract(sessionId, ref) {
-        return fetch(ROUTE_EXTRACT, {
-          method: 'GET',
-          headers: { 'x-session-id': sessionId, 'x-upload-id': ref },
-        }).then(function (resp) {
-          return resp.ok ? resp.json() : null
-        }).catch(function () { return null })
+      function dismissReadyItem(sessionId, item, inputState) {
+        if (item.id !== undefined) {
+          if (removeComposerRef(sessionId, item.id, inputState) !== true) {
+            toast(sessionId, 'error', t('removeFailed', { name: item.name }))
+            return
+          }
+        }
+        dockRemove(item.key)
+      }
+
+      // ── short filename reference (extracts are appended by the host) ──
+      function displayFormOf(ref) {
+        var meta = metaByRef.get(ref)
+        return Core.displayForm(meta === undefined ? { id: ref } : meta)
       }
 
       function serializeRef(ref) {
-        var meta = metaByRef.get(ref)
-        if (meta !== undefined && meta.extract !== undefined) {
-          return Promise.resolve(modelFormOf(ref))
-        }
-        var sessionId = currentSessionId()
-        if (sessionId === undefined || sessionId === null) {
-          return Promise.resolve(modelFormOf(ref))
-        }
-        return fetchExtract(sessionId, ref).then(function (extract) {
-          if (extract !== null && typeof extract === 'object') {
-            var merged = Object.assign({ id: ref }, meta || {}, { extract: extract })
-            if (meta !== undefined) {
-              merged.name = meta.name
-              merged.size = meta.size
-            }
-            metaByRef.set(ref, merged)
-          }
-          return modelFormOf(ref)
-        })
+        return Promise.resolve(displayFormOf(ref))
       }
 
       // ── input-trigger source ─────────────────────────────────────────────
@@ -498,7 +542,7 @@ function buildFileAttachPlugin(env) {
             claim: {
               token: '/attach ',
               submit: function (args) {
-                return sendRecovered(session.sessionId, modelFormOf(args.trim()))
+                return sendRecovered(session.sessionId, displayFormOf(args.trim()))
               },
             },
           }
@@ -647,7 +691,7 @@ function buildFileAttachPlugin(env) {
         },
         chip: {
           display: 'inline-flex',
-          alignItems: 'baseline',
+          alignItems: 'center',
           gap: '6px',
           maxWidth: '100%',
           padding: '2px 8px',
@@ -691,6 +735,18 @@ function buildFileAttachPlugin(env) {
           cursor: 'pointer',
           fontSize: '12px',
         },
+        chipRemove: {
+          flex: '0 0 auto',
+          margin: 0,
+          padding: '0 0 0 2px',
+          border: 'none',
+          background: 'transparent',
+          color: 'inherit',
+          cursor: 'pointer',
+          opacity: 0.7,
+          lineHeight: 1,
+          fontSize: '14px',
+        },
       }
 
       function AttachDock(props) {
@@ -702,12 +758,20 @@ function buildFileAttachPlugin(env) {
           dockListeners.add(ping)
           return function () { dockListeners.delete(ping) }
         }, [])
+        var input = liveInputOf(props)
+        React.useEffect(function () {
+          if (input == null || input.occurrences === undefined) return
+          dockPruneReadyNotIn(sessionId, Core.occurrenceRefs(input.occurrences, SOURCE_NAME))
+        })
         var items = dockForSession(sessionId)
-        if (items.length === 0) return null
         var inflight = items.filter(function (item) {
           return item.phase === 'uploading' || item.phase === 'extracting'
         })
-        var ready = items.filter(function (item) { return item.phase === 'ready' })
+        var ready = readyStillInComposer(
+          items.filter(function (item) { return item.phase === 'ready' }),
+          input,
+        )
+        if (inflight.length === 0 && ready.length === 0) return null
         var children = []
         if (inflight.length > 0) {
           var received = 0
@@ -737,6 +801,16 @@ function buildFileAttachPlugin(env) {
             item.size !== undefined
               ? React.createElement('span', { style: dockStyle.chipSize }, Core.humanSize(item.size))
               : null,
+            React.createElement('button', {
+              type: 'button',
+              style: dockStyle.chipRemove,
+              'aria-label': t('removeAria', { name: item.name }),
+              title: t('removeTitle'),
+              onClick: function (event) {
+                if (event !== undefined && typeof event.stopPropagation === 'function') event.stopPropagation()
+                dismissReadyItem(sessionId, item, input)
+              },
+            }, '×'),
           )
         })
         children.push(React.createElement('div', { key: 'files', style: dockStyle.row },

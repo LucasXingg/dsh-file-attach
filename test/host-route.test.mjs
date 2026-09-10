@@ -20,8 +20,22 @@ function harness({ cwd, dshHome, config = {}, llm, agent }) {
   const routes = new Map()
   const disposers = []
   const tools = []
-  const liveAgent = agent ?? { session: { header: { cwd } } }
+  const liveAgent = agent ?? { session: { id: 's1', header: { cwd } } }
+  const listeners = new Map()
   const ctx = {
+    get(name) {
+      if (name === 'agents') {
+        return {
+          get: (id) => (id === 's1' ? liveAgent : undefined),
+        }
+      }
+      if (name === 'llm') return llm
+      return undefined
+    },
+    on(name, fn) {
+      listeners.set(name, fn)
+      return () => listeners.delete(name)
+    },
     get(name) {
       if (name === 'agents') {
         return {
@@ -51,7 +65,7 @@ function harness({ cwd, dshHome, config = {}, llm, agent }) {
     },
   }
   apply(ctx, { dshHome, ...config })
-  return { ctx, routes, disposers, tools, cwd, dshHome }
+  return { ctx, routes, disposers, tools, cwd, dshHome, listeners }
 }
 
 async function withDirs() {
@@ -143,6 +157,34 @@ test('chunked upload writes into the vault, not the session cwd', async () => {
   await assert.rejects(() => access(path.join(cwd, 'attachments')), /ENOENT/)
   const cwdFiles = await readdirRecursive(cwd)
   assert.equal(cwdFiles.length, 0, 'session cwd stays empty')
+  await cleanupDirs(cwd, dshHome)
+})
+
+test('pre-step appends extracts behind the user prompt in first-reference order', async () => {
+  const { cwd, dshHome } = await withDirs()
+  const h = harness({ cwd, dshHome })
+  const route = h.routes.get('/api/dsh-file-attach/upload')
+  const a = await uploadAll(route, 's1', 'a.pdf', 'text/plain', Buffer.from('AAA-extract'), 100)
+  const b = await uploadAll(route, 's1', 'b.txt', 'text/plain', Buffer.from('BBB-extract'), 100)
+  const preStep = h.listeners.get('agent/pre-step')
+  assert.equal(typeof preStep, 'function')
+  const prompt = `Please compare [attached file "a.pdf" id=${a.id}] with [attached file "b.txt" id=${b.id}] thanks`
+  const decision = await preStep(
+    {
+      agent: { session: { id: 's1', header: { cwd } } },
+      messages: [{ id: 'm1', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: prompt }] }],
+    },
+    async () => ({
+      kind: 'enter',
+      messages: [{ id: 'm1', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: prompt }] }],
+    }),
+  )
+  assert.equal(decision.kind, 'enter')
+  const text = decision.messages[0].content[0].text
+  assert.equal(text.indexOf('Please compare'), 0)
+  assert.ok(text.indexOf('thanks') < text.indexOf('----- extracted content -----'))
+  assert.ok(text.indexOf('AAA-extract') < text.indexOf('BBB-extract'))
+  assert.match(text, /thanks\n----- extracted content -----/)
   await cleanupDirs(cwd, dshHome)
 })
 
