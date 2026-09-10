@@ -35,7 +35,8 @@ but their prompt extract is only a “no text extractor” note.
   raster images.
 - Model-aware routing between DSH native vision and plugin OCR/extraction.
 - Hidden model context: the model receives the extract, while the rendered
-  conversation shows only a compact attachment header.
+  conversation shows only a compact attachment header. **Develop mode** in
+  Settings → Plugins leaves that extract visible.
 - Four model-facing tools for notebook inspection, PDF page OCR, image
   description, and saving the original file.
 - Session-scoped vault storage, filename/path sanitization, upload admission
@@ -187,7 +188,9 @@ from rendered conversation text, including when the conversation splits one
 bubble into several nodes or collapses the newlines around the markers, so
 the user only sees the prompt and the blue filenames. The underlying
 submitted message still contains the extract. Vault paths are never put into
-the prompt.
+the prompt. Turning on **Develop mode** in Settings → Plugins → File attach
+stops that scrub so the conversation shows the same extract text the model
+receives. Already-hidden bubbles stay compact until the page reloads.
 
 The 12-character lowercase hexadecimal `id` is the preferred identifier for
 all tools. A filename also works when exactly one upload in the current
@@ -289,12 +292,15 @@ the host. An individual request body is capped at `maxFileBytes + 1 MiB`.
 
 The config response exposes `maxFileBytes`, `maxFilesPerMessage`,
 `maxConcurrentUploads`, `vaultDir`, `maxExtractChars`, `explainImages`,
-`ocrLanguages`, and the raster MIME list. It does not expose
+`ocrLanguages`, `developMode`, and the raster MIME list. It does not expose
 `explainTimeoutMs`, `describeProvider`, or the fixed client chunk size.
 
 ## Configuration
 
 Edit the `config` object on the `file-attach` row in `cordis.patch.yml`.
+`developMode` is also the composition default for the Plugins settings card
+(Settings → Plugins → File attach). The card writes the user overlay; YAML
+only sets the inherited default.
 
 | Key | Default | Actual effect |
 |---|---:|---|
@@ -307,6 +313,7 @@ Edit the `config` object on the `file-attach` row in `cordis.patch.yml`.
 | `ocrLanguages` | `eng+chi_sim` | Tesseract language IDs used for image and PDF-page OCR. |
 | `explainTimeoutMs` | `30000` | Abort timeout for automatic image captions. |
 | `describeProvider` | `spawn` | Provider passed to `attach_describe_image` when starting a subagent. |
+| `developMode` | `false` | When on, the conversation UI does not hide plugin extract text. |
 
 The upload chunk size is fixed in the bundled client at 1 MiB and is not a
 configuration key.

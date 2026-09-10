@@ -19,3 +19,4 @@
         ocrLanguages: eng+chi_sim
         explainTimeoutMs: 30000
         describeProvider: spawn
+        developMode: false
