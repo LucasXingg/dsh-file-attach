@@ -904,7 +904,7 @@ test('registers a Develop mode card on settings.plugin.item', () => {
   assert.equal(browser.state.settingsNamespace, 'file-attach')
   created.length = 0
   card.component()
-  assert.ok(created.some((node) => node.type === 'input' && node.props.type === 'checkbox' && node.props.checked === true))
+  assert.ok(created.some((node) => node.props && node.props.role === 'switch' && node.props['aria-checked'] === true))
   assert.ok(created.some((node) => node.children && node.children.includes('developMode')))
 })
 
