@@ -16,7 +16,7 @@
  *     model reference. The host appends every extract behind the user prompt
  *     at send time. A scrub over the rendered conversation drops the extract
  *     fence so only the prompt and filenames paint (the submitted message
- *     keeps the extract).
+ *     keeps the extract), unless Develop mode is on in plugin settings.
  *  4. A `conversation.input.dock` strip aligned to the composer card width:
  *     upload progress + the files that will be extracted behind this prompt
  *     (with remove) + an Add picker. Ready files follow the composer: they
@@ -29,6 +29,7 @@ function buildFileAttachPlugin(env) {
   var Core = env.Core
 
   var NS = 'fileAttach'
+  var SETTINGS_NS = 'file-attach'
   var SOURCE_NAME = 'attach'
   var ROUTE_UPLOAD = '/api/dsh-file-attach/upload'
   var ROUTE_ABORT = '/api/dsh-file-attach/abort'
@@ -57,6 +58,9 @@ function buildFileAttachPlugin(env) {
       removeAria: '移除 {name}',
       removeTitle: '从本次消息中移除',
       removeFailed: '无法从草稿中移除 {name}',
+      settingsTitle: '文件附件',
+      developMode: '开发模式',
+      developModeHint: '在对话中显示本插件发给模型的提取正文。已经隐藏的消息在刷新页面前仍保持精简。',
     },
     en: {
       attach: 'Attach files',
@@ -73,6 +77,9 @@ function buildFileAttachPlugin(env) {
       removeAria: 'Remove {name}',
       removeTitle: 'Remove from this message',
       removeFailed: 'Could not remove {name} from the draft',
+      settingsTitle: 'File attach',
+      developMode: 'Develop mode',
+      developModeHint: 'Show the extract text this plugin sends to the model in the conversation. Already-hidden messages stay compact until the page reloads.',
     },
   }
 
@@ -84,8 +91,11 @@ function buildFileAttachPlugin(env) {
       // ── hide extract fences in conversation UI (model form stays intact) ──
       // First in apply: keeping the extract out of the rendered transcript must
       // not depend on any other registration in this plugin succeeding.
+      // Develop mode (plugin settings) turns this scrub off so the user sees
+      // the same extract text the model receives.
       var extractObserver = null
       var extractPoll = null
+      var developModeRef = { current: false }
 
       function scrubTarget() {
         if (typeof document === 'undefined' || document === null) return null
@@ -96,6 +106,7 @@ function buildFileAttachPlugin(env) {
       }
 
       function hideExtractFromUi(target) {
+        if (developModeRef.current) return
         var root = target === undefined || target === null ? scrubTarget() : target
         if (root === null) return
         Core.hideExtractInTree(root)
@@ -121,36 +132,84 @@ function buildFileAttachPlugin(env) {
       var observerRoot = typeof document === 'undefined' || document === null
         ? null
         : (document.documentElement || document.body || null)
-      if (typeof MutationObserver === 'function' && observerRoot !== null) {
-        extractObserver = new MutationObserver(function (records) {
-          for (var r = 0; r < records.length; r += 1) {
-            if (!recordCarriesFence(records[r])) continue
-            // One pass for the whole batch: a fence can span sibling nodes, so
-            // the mutated node alone is not a sufficient scrub unit.
-            hideExtractFromUi()
-            return
-          }
-        })
-        extractObserver.observe(observerRoot, {
-          childList: true,
-          subtree: true,
-          characterData: true,
-        })
-      }
-      if (observerRoot !== null) {
-        hideExtractFromUi()
-        // Safety net for a surface that renders without a mutation this
-        // observer sees (or a batch whose fence text arrived in pieces).
-        extractPoll = setInterval(function () { hideExtractFromUi() }, 1000)
-        if (typeof extractPoll === 'object' && extractPoll !== null && typeof extractPoll.unref === 'function') {
-          extractPoll.unref()
+
+      function startScrub() {
+        if (observerRoot === null) return
+        if (extractObserver === null && typeof MutationObserver === 'function') {
+          extractObserver = new MutationObserver(function (records) {
+            for (var r = 0; r < records.length; r += 1) {
+              if (!recordCarriesFence(records[r])) continue
+              // One pass for the whole batch: a fence can span sibling nodes, so
+              // the mutated node alone is not a sufficient scrub unit.
+              hideExtractFromUi()
+              return
+            }
+          })
+          extractObserver.observe(observerRoot, {
+            childList: true,
+            subtree: true,
+            characterData: true,
+          })
         }
+        if (extractPoll === null) {
+          hideExtractFromUi()
+          // Safety net for a surface that renders without a mutation this
+          // observer sees (or a batch whose fence text arrived in pieces).
+          extractPoll = setInterval(function () { hideExtractFromUi() }, 1000)
+          if (typeof extractPoll === 'object' && extractPoll !== null && typeof extractPoll.unref === 'function') {
+            extractPoll.unref()
+          }
+        }
+      }
+
+      function stopScrub() {
+        if (extractObserver !== null) {
+          extractObserver.disconnect()
+          extractObserver = null
+        }
+        if (extractPoll !== null) {
+          clearInterval(extractPoll)
+          extractPoll = null
+        }
+      }
+
+      function applyDevelopMode(on) {
+        developModeRef.current = on === true
+        if (developModeRef.current) stopScrub()
+        else startScrub()
+      }
+
+      function bindSettingsScope() {
+        var binder = typeof ctx.get === 'function' ? ctx.get('settingsScope') : ctx.settingsScope
+        if (binder == null || typeof binder.bind !== 'function') return undefined
+        try {
+          return binder.bind({ namespace: SETTINGS_NS })
+        } catch {
+          return undefined
+        }
+      }
+
+      function snapshotDevelopMode(scope) {
+        if (scope == null || typeof scope.getSnapshot !== 'function') return undefined
+        var snap = scope.getSnapshot()
+        if (snap == null || snap.status !== 'ready' || snap.value == null || typeof snap.value !== 'object') {
+          return undefined
+        }
+        return snap.value.developMode === true
+      }
+
+      var settingsScope = bindSettingsScope()
+      applyDevelopMode(snapshotDevelopMode(settingsScope) === true)
+      if (settingsScope !== undefined && typeof settingsScope.subscribe === 'function') {
+        ctx.effect(function () {
+          return settingsScope.subscribe(function () {
+            var next = snapshotDevelopMode(settingsScope)
+            if (next !== undefined) applyDevelopMode(next)
+          })
+        }, 'file-attach: develop-mode watch')
       }
       ctx.effect(function () {
-        return function () {
-          if (extractObserver !== null) extractObserver.disconnect()
-          if (extractPoll !== null) clearInterval(extractPoll)
-        }
+        return function () { stopScrub() }
       }, 'file-attach: extract scrub teardown')
 
       var t = ctx.locale.bind(NS)
@@ -233,6 +292,9 @@ function buildFileAttachPlugin(env) {
             maxFilesPerMessage: numberOr(body.maxFilesPerMessage, limitsRef.current.maxFilesPerMessage),
             maxConcurrentUploads: numberOr(body.maxConcurrentUploads, limitsRef.current.maxConcurrentUploads),
             chunkBytes: limitsRef.current.chunkBytes,
+          }
+          if (snapshotDevelopMode(settingsScope) === undefined && typeof body.developMode === 'boolean') {
+            applyDevelopMode(body.developMode)
           }
         })
         .catch(function () { /* defaults stand */ })
@@ -946,6 +1008,122 @@ function buildFileAttachPlugin(env) {
           },
         }, AttachDock)
       })
+
+      var cardStyle = {
+        root: {
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '8px',
+          padding: '8px 0',
+          color: 'var(--dsw-alias-label-primary, var(--dsw-fg, inherit))',
+          fontSize: '13px',
+        },
+        title: {
+          fontWeight: 600,
+          fontSize: '14px',
+        },
+        row: {
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '16px',
+        },
+        label: {
+          flex: '1 1 auto',
+          minWidth: 0,
+          lineHeight: 1.5,
+        },
+        switch: {
+          boxSizing: 'border-box',
+          flex: '0 0 auto',
+          width: '36px',
+          height: '20px',
+          padding: 0,
+          border: 'none',
+          borderRadius: '999px',
+          cursor: 'pointer',
+          position: 'relative',
+          transition: 'background-color 120ms ease',
+        },
+        switchOn: {
+          background: 'var(--dsw-alias-state-business-primary, var(--dsw-accent, #3b82f6))',
+        },
+        switchOff: {
+          background: 'var(--dsw-alias-interactive-bg-disabled, var(--dsw-border, #c5c9ce))',
+        },
+        switchDisabled: {
+          opacity: 0.55,
+          cursor: 'not-allowed',
+        },
+        thumb: {
+          position: 'absolute',
+          top: '2px',
+          width: '16px',
+          height: '16px',
+          borderRadius: '50%',
+          background: 'var(--dsw-alias-bg-layer-1, #fff)',
+          boxShadow: '0 0 0 0.5px rgb(0 0 0 / 8%), 0 1px 2px rgb(0 0 0 / 18%)',
+          transition: 'left 120ms ease',
+        },
+        hint: {
+          margin: 0,
+          color: 'var(--dsw-alias-label-tertiary, inherit)',
+          opacity: 0.75,
+          fontSize: '12px',
+          lineHeight: 1.5,
+        },
+      }
+
+      function FileAttachSettingsCard() {
+        var bump = React.useState(0)
+        var setRev = bump[1]
+        React.useEffect(function () {
+          if (settingsScope == null || typeof settingsScope.subscribe !== 'function') return undefined
+          return settingsScope.subscribe(function () { setRev(function (n) { return n + 1 }) })
+        }, [])
+        var snap = settingsScope != null && typeof settingsScope.getSnapshot === 'function'
+          ? settingsScope.getSnapshot()
+          : null
+        var ready = snap !== null && snap.status === 'ready'
+        var checked = ready && snap.value != null && snap.value.developMode === true
+        var writable = ready && snap.writable !== false
+        function setDevelopMode(next) {
+          if (!writable || settingsScope == null) return
+          if (typeof settingsScope.set === 'function') void settingsScope.set('developMode', next)
+          applyDevelopMode(next)
+        }
+        return React.createElement('div', { style: cardStyle.root },
+          React.createElement('div', { style: cardStyle.title }, t('settingsTitle')),
+          React.createElement('div', { style: cardStyle.row },
+            React.createElement('span', { id: 'file-attach-develop-mode-label', style: cardStyle.label }, t('developMode')),
+            React.createElement('button', {
+              type: 'button',
+              role: 'switch',
+              'aria-checked': checked,
+              'aria-labelledby': 'file-attach-develop-mode-label',
+              disabled: !writable,
+              onClick: function () { setDevelopMode(!checked) },
+              style: Object.assign({}, cardStyle.switch, checked ? cardStyle.switchOn : cardStyle.switchOff, writable ? {} : cardStyle.switchDisabled),
+            }, React.createElement('span', {
+              'aria-hidden': true,
+              style: Object.assign({}, cardStyle.thumb, { left: checked ? '18px' : '2px' }),
+            })),
+          ),
+          React.createElement('p', { style: cardStyle.hint }, t('developModeHint')),
+        )
+      }
+
+      try {
+        ctx.slots.inject('settings.plugin.item', function () {
+          return ctx.slots.register({
+            name: 'settings.plugin.item',
+            key: SETTINGS_NS,
+            locale: NS,
+          }, FileAttachSettingsCard)
+        })
+      } catch {
+        /* settings page not mounted in this profile */
+      }
 
       // ── teardown ──────────────────────────────────────────────────────────
       ctx.effect(function () {

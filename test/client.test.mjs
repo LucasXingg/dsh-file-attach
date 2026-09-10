@@ -309,7 +309,7 @@ test('Core.chunkPlan splits byte ranges', () => {
 // ── plugin behavior with stubbed ctx and browser ────────────────────────────
 
 /** Minimal browser/document/fetch stand-ins for apply(). */
-function stubBrowser({ visual = false, body = undefined } = {}) {
+function stubBrowser({ visual = false, body = undefined, developMode = false, settingsStatus = 'ready', configDevelopMode } = {}) {
   const listeners = new Map()
   const state = {
     prevented: false,
@@ -326,6 +326,15 @@ function stubBrowser({ visual = false, body = undefined } = {}) {
     draftImages: [],
     disposers: [],
     observers: [],
+    settings: {
+      status: settingsStatus,
+      value: { developMode },
+      user: developMode ? { developMode: true } : {},
+      writable: true,
+    },
+    settingsListeners: [],
+    settingsNamespace: undefined,
+    configDevelopMode,
   }
   const Event = class Event {
     constructor(type) { this.type = type }
@@ -358,7 +367,9 @@ function stubBrowser({ visual = false, body = undefined } = {}) {
   globalThis.fetch = async (url, options = {}) => {
     state.fetches.push({ url, options })
     if (String(url).includes('/config')) {
-      return { ok: true, json: async () => ({ maxFileBytes: 12345, maxFilesPerMessage: 3, vaultDir: 'file-attach' }) }
+      const body = { maxFileBytes: 12345, maxFilesPerMessage: 3, vaultDir: 'file-attach' }
+      if (typeof state.configDevelopMode === 'boolean') body.developMode = state.configDevelopMode
+      return { ok: true, json: async () => body }
     }
     if (String(url).includes('/vision')) {
       const model = options.headers && options.headers['x-model']
@@ -424,6 +435,33 @@ function stubCtx(browser) {
       releaseDraftImages() {},
     },
     get(name) {
+      if (name === 'settingsScope') {
+        if (browser.state.settings === null) return undefined
+        return {
+          bind({ namespace }) {
+            browser.state.settingsNamespace = namespace
+            return {
+              getSnapshot: () => browser.state.settings,
+              subscribe(fn) {
+                browser.state.settingsListeners.push(fn)
+                return () => {
+                  browser.state.settingsListeners = browser.state.settingsListeners.filter((listener) => listener !== fn)
+                }
+              },
+              set(field, value) {
+                browser.state.settings = {
+                  ...browser.state.settings,
+                  status: 'ready',
+                  value: { ...(browser.state.settings.value || {}), [field]: value },
+                  user: { ...(browser.state.settings.user || {}), [field]: value },
+                }
+                for (const listener of browser.state.settingsListeners) listener()
+                return Promise.resolve()
+              },
+            }
+          },
+        }
+      }
       if (name === 'modelDirectories') {
         return {
           directoryFor: () => ({
@@ -476,6 +514,10 @@ function fileLike(name, type, size) {
 }
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+function slotNamed(browser, name) {
+  return browser.state.slots.find((slot) => slot.name === name)
+}
 
 test('apply registers the attach source; codec serializes a short filename reference', async () => {
   const browser = stubBrowser()
@@ -538,8 +580,8 @@ test('registers the attach strip into conversation.input.dock at composer width'
   const browser = stubBrowser()
   const { ctx } = stubCtx(browser)
   build({ React, Core }).apply(ctx)
-  assert.equal(browser.state.slots.length, 1)
-  const slot = browser.state.slots[0]
+  const slot = slotNamed(browser, 'conversation.input.dock')
+  assert.ok(slot)
   assert.equal(slot.name, 'conversation.input.dock')
   assert.equal(slot.options.name, 'conversation.input.dock')
   assert.equal(slot.options.id, 'file-attach')
@@ -553,7 +595,7 @@ test('registers the attach strip into conversation.input.dock at composer width'
   await tick()
   await tick()
   created.length = 0
-  const Dock = browser.state.slots[0].component
+  const Dock = slotNamed(browser, 'conversation.input.dock').component
   Dock({ sessionId: 's1', attach: () => {} })
   const root = created.find((node) => (
     node.props.style
@@ -614,7 +656,7 @@ test('dock chips can be removed, which deletes the composer reference', async ()
   await tick()
 
   created.length = 0
-  const Dock = browser.state.slots[0].component
+  const Dock = slotNamed(browser, 'conversation.input.dock').component
   const live = input.state.getSnapshot()
   Dock({ sessionId: 's1', attach: () => {}, input: live })
   const remove = created.find((node) => (
@@ -658,7 +700,7 @@ test('ready dock files disappear after submit clears composer occurrences', asyn
   await tick()
   await tick()
 
-  const Dock = browser.state.slots[0].component
+  const Dock = slotNamed(browser, 'conversation.input.dock').component
   created.length = 0
   const whileDraft = Dock({
     sessionId: 's1',
@@ -837,6 +879,86 @@ test('a rendered message loses its extract fence on the first mutation batch', (
   browser.state.observers[0].callback([{ type: 'childList', addedNodes: [rendered] }])
 
   assert.equal(bubble.textContent, '[attached file "a.jpg" (1.0 KB) id=a1]')
+  for (const dispose of browser.state.disposers) dispose()
+})
+
+test('registers a Develop mode card on settings.plugin.item', () => {
+  const created = []
+  const React = {
+    useState: (value) => [value, () => {}],
+    useEffect: (fn) => {
+      fn()
+      return undefined
+    },
+    createElement: (type, props, ...children) => {
+      created.push({ type, props: props || {}, children })
+      return { type, props: props || {}, children }
+    },
+  }
+  const browser = stubBrowser({ developMode: true })
+  const { ctx } = stubCtx(browser)
+  build({ React, Core }).apply(ctx)
+  const card = slotNamed(browser, 'settings.plugin.item')
+  assert.ok(card)
+  assert.equal(card.options.key, 'file-attach')
+  assert.equal(browser.state.settingsNamespace, 'file-attach')
+  created.length = 0
+  card.component()
+  assert.ok(created.some((node) => node.props && node.props.role === 'switch' && node.props['aria-checked'] === true))
+  assert.ok(created.some((node) => node.children && node.children.includes('developMode')))
+})
+
+test('develop mode leaves extract fences in the conversation until it is turned off', () => {
+  const bubble = el('div', { class: 'bubble' })
+  const body = el('div', {}, el('div', { class: 'transcript' }, bubble), el('div', { 'data-composer-card': '' }))
+  const browser = stubBrowser({ body, developMode: true })
+  const { ctx } = stubCtx(browser)
+  build({ React: {}, Core }).apply(ctx)
+
+  assert.equal(browser.state.observers.length, 0, 'scrub observer stays off while develop mode is on')
+
+  const model = Core.modelForm({ id: 'a1', name: 'a.jpg', size: 1024, extract: { text: 'SECRET' } })
+  const shown = el('div', {}, txt(model))
+  bubble.firstChild = shown
+  shown.parentNode = bubble
+  shown.parentElement = bubble
+  assert.match(bubble.textContent, /SECRET/)
+
+  browser.state.settings = {
+    ...browser.state.settings,
+    value: { developMode: false },
+    user: { developMode: false },
+  }
+  for (const listener of browser.state.settingsListeners) listener()
+  assert.equal(browser.state.observers.length, 1, 'turning develop mode off installs the scrub')
+
+  const rendered = el('div', {}, txt(model))
+  bubble.firstChild = rendered
+  rendered.parentNode = bubble
+  rendered.parentElement = bubble
+  browser.state.observers[0].callback([{ type: 'childList', addedNodes: [rendered] }])
+  assert.equal(bubble.textContent, '[attached file "a.jpg" (1.0 KB) id=a1]')
+  for (const dispose of browser.state.disposers) dispose()
+})
+
+test('host config developMode seeds the scrub when settings are still loading', async () => {
+  const bubble = el('div', { class: 'bubble' })
+  const body = el('div', {}, el('div', { class: 'transcript' }, bubble))
+  const browser = stubBrowser({ body, settingsStatus: 'loading', configDevelopMode: true })
+  const { ctx } = stubCtx(browser)
+  build({ React: {}, Core }).apply(ctx)
+  assert.equal(browser.state.observers.length, 1, 'scrub starts until the host config lands')
+  await tick()
+  await tick()
+  assert.equal(browser.state.observers[0].observing, undefined, 'host developMode disconnects the observer')
+
+  const model = Core.modelForm({ id: 'a1', name: 'a.jpg', size: 1024, extract: { text: 'SECRET' } })
+  const rendered = el('div', {}, txt(model))
+  bubble.firstChild = rendered
+  rendered.parentNode = bubble
+  rendered.parentElement = bubble
+  browser.state.observers[0].callback([{ type: 'childList', addedNodes: [rendered] }])
+  assert.match(bubble.textContent, /SECRET/)
   for (const dispose of browser.state.disposers) dispose()
 })
 

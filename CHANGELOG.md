@@ -5,6 +5,13 @@ follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Develop mode on the Plugins settings card. When it is on, the conversation
+  UI no longer hides extract text this plugin sends to the model. YAML
+  `developMode` is only the inherited default; already-hidden bubbles stay
+  compact until the page reloads. The control is a switch, not a checkbox.
+
 ## [0.1.2] - 2026-09-10
 
 ### Fixed

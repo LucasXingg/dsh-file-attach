@@ -4,7 +4,7 @@ import { Readable } from 'node:stream'
 import { mkdtemp, readFile, rm, access } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { apply } from '../lib/index.js'
+import { apply, SETTINGS_NS, Settings } from '../lib/index.js'
 import { setRecognizeImage } from '../lib/extract.js'
 
 setRecognizeImage(async () => 'stub-ocr')
@@ -20,6 +20,7 @@ function harness({ cwd, dshHome, config = {}, llm, agent }) {
   const routes = new Map()
   const disposers = []
   const tools = []
+  const sections = []
   const liveAgent = agent ?? { session: { id: 's1', header: { cwd } } }
   const listeners = new Map()
   const ctx = {
@@ -63,9 +64,23 @@ function harness({ cwd, dshHome, config = {}, llm, agent }) {
       if (typeof disposer === 'function') disposers.push(disposer)
       return disposer
     },
+    inject(deps, callback) {
+      if (!Array.isArray(deps) || !deps.includes('settings')) return
+      const settingsCtx = {
+        settings: {
+          installSection(owner, ns, schema, entry, hooks) {
+            sections.push({ owner, ns, schema, entry, hooks })
+            if (hooks && typeof hooks.setSource === 'function') {
+              hooks.setSource(() => ({ ...entry }))
+            }
+          },
+        },
+      }
+      callback(settingsCtx)
+    },
   }
   apply(ctx, { dshHome, ...config })
-  return { ctx, routes, disposers, tools, cwd, dshHome, listeners }
+  return { ctx, routes, disposers, tools, cwd, dshHome, listeners, sections }
 }
 
 async function withDirs() {
@@ -270,7 +285,24 @@ test('config route reports the deployment limits', async () => {
   const body = JSON.parse(response.body)
   assert.equal(body.maxFileBytes, 123)
   assert.equal(body.vaultDir, 'file-attach')
+  assert.equal(body.developMode, false)
   assert.equal(body.uploadDir, undefined)
+  assert.equal(h.sections.length, 1)
+  assert.equal(h.sections[0].ns, SETTINGS_NS)
+  assert.equal(h.sections[0].schema, Settings)
+  assert.deepEqual(h.sections[0].entry, { developMode: false })
+  await cleanupDirs(cwd, dshHome)
+})
+
+test('config route reports YAML developMode through the settings section', async () => {
+  const { cwd, dshHome } = await withDirs()
+  const h = harness({ cwd, dshHome, config: { developMode: true } })
+  const route = h.routes.get('/api/dsh-file-attach/config')
+  const response = res()
+  await route.handler(req({ method: 'GET' }), response)
+  assert.equal(response.statusCode, 200)
+  assert.equal(JSON.parse(response.body).developMode, true)
+  assert.deepEqual(h.sections[0].entry, { developMode: true })
   await cleanupDirs(cwd, dshHome)
 })
 

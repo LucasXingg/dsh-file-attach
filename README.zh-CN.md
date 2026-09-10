@@ -33,6 +33,7 @@
 - 文本/代码、PDF、DOCX、XLSX、PPTX、Jupyter Notebook 和栅格图片提取器。
 - 根据当前模型能力，在 DSH 原生视觉与插件 OCR/文本提取之间自动路由。
 - 对用户隐藏的大段上下文：模型收到完整提取内容，对话界面只显示简短附件头。
+  在 **设置 → 插件** 打开**开发模式**后，提取正文会留在对话里。
 - 4 个模型工具：读取 Notebook 单元、对 PDF 单页 OCR、描述图片、保存原文件。
 - 按会话隔离的文件库、文件名和路径净化、上传限制、残缺上传清理及持久化提取
   结果查询接口。
@@ -166,7 +167,9 @@ Please compare [attached file "a.pdf" (2.4 MB) id=a1b2c3d4e5f6] with [attached f
 输入框上方的文件列表就是这些会进到末尾提取区的文件。浏览器会从对话界面去掉
 提取区块；即使对话把同一条气泡拆成多个节点，或折叠了标记周围的换行，也同样
 移除。用户只看到提示词和蓝色文件名。底层提交消息仍包含完整提取内容。提示词
-中不会出现文件库路径。
+中不会出现文件库路径。在 **设置 → 插件 → 文件附件** 打开**开发模式**后，对话
+不再隐藏提取正文，用户看到的内容与发给模型的一致。已经隐藏的气泡在刷新页面
+前仍保持精简。
 
 12 位小写十六进制 `id` 是所有工具首选的附件标识。文件名也可以使用，但仅当
 当前会话文件库中恰好有一个同名上传时有效；存在同名文件时必须使用 ID。
@@ -261,12 +264,14 @@ Please compare [attached file "a.pdf" (2.4 MB) id=a1b2c3d4e5f6] with [attached f
 
 配置接口只返回 `maxFileBytes`、`maxFilesPerMessage`、
 `maxConcurrentUploads`、`vaultDir`、`maxExtractChars`、`explainImages`、
-`ocrLanguages` 和栅格 MIME 列表；不会返回 `explainTimeoutMs`、
+`ocrLanguages`、`developMode` 和栅格 MIME 列表；不会返回 `explainTimeoutMs`、
 `describeProvider` 或固定的客户端分块大小。
 
 ## 配置
 
-编辑 `cordis.patch.yml` 中 `file-attach` 行的 `config`：
+编辑 `cordis.patch.yml` 中 `file-attach` 行的 `config`。
+`developMode` 同时也是插件设置卡片（设置 → 插件 → 文件附件）的组合层默认值；
+卡片写入用户覆盖层，YAML 只决定继承默认值。
 
 | 配置项 | 默认值 | 实际作用 |
 |---|---:|---|
@@ -279,6 +284,7 @@ Please compare [attached file "a.pdf" (2.4 MB) id=a1b2c3d4e5f6] with [attached f
 | `ocrLanguages` | `eng+chi_sim` | 图片和 PDF 单页 OCR 使用的 Tesseract 语言 ID。 |
 | `explainTimeoutMs` | `30000` | 自动图片描述的中止超时。 |
 | `describeProvider` | `spawn` | `attach_describe_image` 启动子代理时使用的 provider。 |
+| `developMode` | `false` | 打开后，对话界面不再隐藏本插件发给模型的提取正文。 |
 
 上传分块大小固定为 1 MiB，不是可配置项。
 
